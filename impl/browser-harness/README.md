@@ -17,7 +17,7 @@ The harness:
 - runs it in a **Web Worker inside a null-origin sandboxed iframe**, with no
   ambient access to your DOM, storage, cookies, or keys;
 - grants it a small, explicit capability API — inbound fetch calls, a
-  [KPS](https://github.com/privacy-ethereum/kps) key-pinned transport
+  [KPS](https://privacy-ethereum.github.io/kps/) key-pinned transport
   (bridged so the worker never touches WebRTC), persistent storage
   (IndexedDB on the host origin, namespaced per specifier), and logging;
 - hands you back one thing: an anonymized `fetch`.

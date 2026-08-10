@@ -53,13 +53,20 @@ for (const f of jsFiles) {
 }
 ok(`site bundles have no unresolved build-time defines (${jsFiles.length} JS file${jsFiles.length === 1 ? "" : "s"})`);
 
-// The hosted spec page: SPEC.md rendered into the built site at build time.
-const specHtml = await readFile(`${SITE}dist/spec/index.html`, "utf8");
-if (!specHtml.includes("anon-rpc Specification")) fail("spec page is missing the rendered SPEC.md content");
-if (specHtml.includes("<!--SPEC_HTML-->")) fail("spec page still contains the unreplaced SPEC_HTML slot");
-if (!specHtml.includes("View on GitHub")) fail("spec page is missing the View on GitHub link");
-if (!specHtml.includes('class="shiki')) fail("spec page code blocks are not syntax-highlighted");
-ok("spec page hosts rendered SPEC.md with a GitHub link and highlighted code");
+// The hosted markdown pages: repo docs rendered into the site at build time.
+const docPages = [
+  ["spec", "anon-rpc Specification"],
+  ["wallets", "Integration Guide: Web Wallets and Web Applications"],
+  ["networks", "Integration Guide: Anonymizing Networks"],
+];
+for (const [slug, heading] of docPages) {
+  const html = await readFile(`${SITE}dist/${slug}/index.html`, "utf8");
+  if (!html.includes(heading)) fail(`/${slug}/ is missing its rendered markdown (want "${heading}")`);
+  if (html.includes("<!--DOC_HTML-->")) fail(`/${slug}/ still contains the unreplaced DOC_HTML slot`);
+  if (!html.includes("View on GitHub")) fail(`/${slug}/ is missing the View on GitHub link`);
+  if (!html.includes('class="shiki')) fail(`/${slug}/ code blocks are not syntax-highlighted`);
+}
+ok("doc pages (spec, wallets, networks) render with GitHub links and highlighted code");
 
 // anvil
 const anvilPort = 21000 + Math.floor(Math.random() * 9000);

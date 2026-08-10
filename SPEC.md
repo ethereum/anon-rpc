@@ -428,7 +428,7 @@ The log API is console-like but does not promise browser `console` semantics.
 ## 15. References
 
 - anon-rpc proposal article: https://privreads.ethereum.foundation/feed/anon-rpc/
-- KPS (Key Pinned Streams): https://github.com/privacy-ethereum/kps — see its `SPEC.md` for the wire protocol and behavioural contract; §10 tracks KPS specification version `^0.2.1`.
+- KPS (Key Pinned Streams): https://privacy-ethereum.github.io/kps/ — the wire protocol and behavioural contract are defined in the project's `SPEC.md` (https://github.com/privacy-ethereum/kps/blob/main/SPEC.md); §10 tracks KPS specification version `^0.2.1`.
 - RFC 2119, RFC 8174 — requirement-level keywords.
 
 ## Appendix A: Design rationale (non-normative)

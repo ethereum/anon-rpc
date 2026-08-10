@@ -24,7 +24,7 @@ The harness runs untrusted, hash-pinned worker code inside a Web Worker in a nul
 sandboxed iframe (§6), and exposes the `AnonRpcWorkerApi` capability surface
 (§7–§13) across the `postMessage` boundary — including a **real KPS transport**
 ([`@kpstreams/webrtc-client`](https://www.npmjs.com/package/@kpstreams/webrtc-client),
-from [privacy-ethereum/kps](https://github.com/privacy-ethereum/kps)) bridged
+from [KPS](https://privacy-ethereum.github.io/kps/)) bridged
 from the host to the worker.
 
 ## Architecture

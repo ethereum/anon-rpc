@@ -8,5 +8,7 @@ granting it a small, explicit, transport-neutral capability API.
 
 - [SPEC.md](SPEC.md) — the normative specification (design rationale in its
   Appendix A; version history in [CHANGELOG.md](CHANGELOG.md)).
+- Integration guides: [for wallets & apps](docs/integrate-wallet.md) ·
+  [for anonymizing networks](docs/integrate-network.md).
 - [impl/](impl/) — a working reference prototype (browser harness + conforming
   worker, with a real KPS transport bridged across the sandbox boundary).
