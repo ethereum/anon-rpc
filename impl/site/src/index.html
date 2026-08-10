@@ -28,6 +28,7 @@
         <span class="brand-name">anon-rpc</span>
       </a>
       <nav class="nav-links">
+        <a href="#integrate">Guides</a>
         <a href="#how">How it works</a>
         <a href="spec/">Spec</a>
         <a class="gh" href="https://github.com/privacy-ethereum/anon-rpc" target="_blank" rel="noopener" aria-label="View source on GitHub" title="View source on GitHub">
@@ -58,6 +59,24 @@
   </section>
 
   <main>
+    <!-- Persona router: the two integration guides, front and centre -->
+    <section class="section section-tight wrap" id="integrate">
+      <div class="section-head">
+        <div class="eyebrow">Start here</div>
+        <h2>Integration Guides</h2>
+      </div>
+      <div class="personas">
+        <a class="card tool-card" href="wallets/">
+          <h3>For wallets &amp; apps <span class="arrow">→</span></h3>
+          <p>Construct a worker from a specifier address and get back an anonymized <code>fetch</code>. One class, one package.</p>
+        </a>
+        <a class="card tool-card" href="networks/">
+          <h3>For anonymizing networks <span class="arrow">→</span></h3>
+          <p>Ship your client as a hash-pinned worker: the capability API, the specifier contract, hosting the bytes.</p>
+        </a>
+      </div>
+    </section>
+
     <!-- Why -->
     <section class="section wrap" id="why">
       <div class="section-head">
@@ -126,14 +145,6 @@
         <h2>Spec, harness, demo</h2>
       </div>
       <div class="tools">
-        <a class="card tool-card" href="wallets/">
-          <h3>Integrate: wallets &amp; apps <span class="arrow">→</span></h3>
-          <p>One class, one package: construct a worker from a specifier address and get back an anonymized <code>fetch</code>.</p>
-        </a>
-        <a class="card tool-card" href="networks/">
-          <h3>Integrate: anonymizing networks <span class="arrow">→</span></h3>
-          <p>Ship your client as a hash-pinned worker: author it against the capability API, publish a specifier, host the bytes.</p>
-        </a>
         <a class="card tool-card" href="demo/">
           <h3>Live demo <span class="arrow">→</span></h3>
           <p>Watch an ETH balance through a hash-verified worker running in the sandbox, resolved from the mainnet specifier.</p>
