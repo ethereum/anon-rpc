@@ -172,6 +172,10 @@ anywhere — so hosting is low-stakes and you should list several:
 - [ ] Specifier deployed; its update governance (who can change the hash, or frozen forever) stated publicly
 - [ ] Two or more resolvers listed, serving byte-identical content
 - [ ] Booted end-to-end via the demo page against your specifier
+- [ ] Listed in [`known-workers.json`](https://github.com/privacy-ethereum/anon-rpc/blob/main/known-workers.json)
+      (open a PR) — that file drives the demo's worker picker and the sample in
+      the wallet guide, so a listing is how wallet authors find you. Include a
+      `configNote` for anything shared or provisional, like a demo endpoint.
 
 ## Reference
 

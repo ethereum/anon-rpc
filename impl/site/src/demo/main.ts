@@ -3,6 +3,7 @@
 // the sandboxed worker's anonymized fetch.
 
 import { AnonRpcWorker } from "@anon-rpc/browser-harness";
+import knownWorkers from "../../../../known-workers.json";
 
 const SETTINGS_KEY = "anon-rpc-demo-settings";
 const POLL_MS = 12_000; // ~mainnet block time
@@ -11,13 +12,15 @@ const DEFAULT_WATCH = "0x00000000219ab540356cBB839Cbe05303d7705Fa";
 
 /* --- worker presets --- */
 
-// Workers published on mainnet. A preset only prefills the fields below; any
-// specifier address can be pasted in by hand, which switches the picker to
-// "custom".
+// Workers published on mainnet, from the repo's known-workers.json — the same
+// list the wallet integration guide shows. A preset only prefills the fields
+// below; any specifier address can be pasted in by hand, which switches the
+// picker to "custom".
 //
-// `gateway` is worker-specific config (§7.1), delivered as
-// `config: { gateways: [...] }`. `undefined` means the worker takes no config,
-// and the field is hidden for it.
+// `gateway` is the demo's flattened view of worker config (§7.1): the workers
+// listed so far take a single KPS gateway, which this page exposes as an
+// editable field. `undefined` means the worker takes no config, and the field
+// is hidden for it.
 type Preset = {
   id: string;
   label: string;
@@ -27,35 +30,24 @@ type Preset = {
   gatewayNote?: string;
 };
 
-// tor-js's public gateway. Demonstration only — see the note below; anything
-// real should run its own (https://github.com/privacy-ethereum/tor-js).
-const TORJS_DEMO_GATEWAY =
-  "170.64.236.147:12298:uEiBHwUMNRTetrbqScahm81Di57Xv2OphNrx-CurJGOq3ww";
+type KnownWorker = {
+  id: string;
+  label: string;
+  specifier: string;
+  note?: string;
+  config?: { gateways?: string[] };
+  configNote?: string;
+};
 
 const PRESETS: Preset[] = [
-  {
-    id: "passthrough",
-    label: "Passthrough — plain fetch (no anonymization)",
-    specifier: "0x4fd77be300f31c5fe6ab266d35d27750a3478d27",
-    note:
-      "The minimal reference worker: it fulfils calls with an ordinary fetch, so " +
-      "requests are not anonymized. It demonstrates the sandbox and hash pinning, " +
-      "not privacy.",
-  },
-  {
-    id: "tor-js",
-    label: "tor-js — fetch over Tor",
-    specifier: "0x700dA3193D35fA54Cd3fBf29B66f2a2A0385659e",
-    gateway: TORJS_DEMO_GATEWAY,
-    note:
-      "Runs a full Tor client compiled to WebAssembly inside the sandbox, building " +
-      "circuits in the browser. Expect ~15–30 s to bootstrap before the first " +
-      "balance arrives, and slower polls thereafter.",
-    gatewayNote:
-      "Demonstration gateway only: limited capacity, and it may disappear at any " +
-      "time. Browsers cannot open raw TCP, so a gateway relays already-encrypted " +
-      "Tor traffic — run your own for anything real.",
-  },
+  ...(knownWorkers.workers as KnownWorker[]).map((w) => ({
+    id: w.id,
+    label: w.label,
+    specifier: w.specifier,
+    gateway: w.config?.gateways?.[0],
+    note: w.note,
+    gatewayNote: w.configNote,
+  })),
   {
     id: "custom",
     label: "Custom — paste a specifier",

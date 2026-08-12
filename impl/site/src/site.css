@@ -360,6 +360,53 @@ code {
   font-size: inherit;
   color: var(--text-dim);
 }
+/* The wallet guide's known-worker picker: tabs that swap the quick-start sample
+   between the deployments in known-workers.json. */
+.prose .picker {
+  margin: 1.2em 0 1.6em;
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.prose .picker-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.prose .picker-tab {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  padding: 9px 14px;
+  margin-bottom: -1px;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s, background 0.2s;
+}
+.prose .picker-tab:hover { color: var(--text); background: rgba(157, 123, 255, 0.07); }
+.prose .picker-tab[aria-selected="true"] {
+  color: var(--text);
+  border-bottom-color: var(--violet);
+}
+.prose .picker-tab:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(157, 123, 255, 0.25);
+}
+.prose .picker pre { margin: 14px 0 0; }
+.prose .picker-note {
+  margin: 14px 0 0;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+.prose .picker-note.warn { color: var(--warn); }
+
 .prose blockquote {
   margin: 1em 0 1.4em;
   padding: 10px 18px;

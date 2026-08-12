@@ -27,13 +27,13 @@ native harness would be a separate package.
 
 ## Quick start
 
+<!--WORKER_PICKER:START-->
+
 ```ts
 import { AnonRpcWorker } from "@anon-rpc/browser-harness";
 
 const worker = new AnonRpcWorker({
-  // The network's specifier contract. This example is the PASSTHROUGH demo
-  // worker on mainnet — real plumbing, zero anonymity (it fetches directly).
-  // A real network publishes its own address.
+  // The anonymizing network's specifier contract, on mainnet.
   address: "0x4fd77be300f31c5fe6ab266d35d27750a3478d27",
 
   // Optional, network-defined (see the network's docs for its schema).
@@ -63,6 +63,16 @@ const { result } = await res.json();
 
 worker.close(); // tears down the sandbox
 ```
+
+The address above is the passthrough worker, which fulfils calls with an
+ordinary `fetch` — it exercises the sandbox and hash pinning without
+anonymizing anything. Every deployment we know of, and the config each one
+expects, is listed in
+[known-workers.json](https://github.com/privacy-ethereum/anon-rpc/blob/main/known-workers.json);
+the [live demo](https://privacy-ethereum.github.io/anon-rpc/demo/) runs any of
+them.
+
+<!--WORKER_PICKER:END-->
 
 `worker.fetch` is this-bound — pass it as a free function to anything that
 accepts a custom `fetch` or transport (a viem custom transport, an ethers

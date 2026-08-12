@@ -68,6 +68,30 @@ for (const [slug, heading] of docPages) {
 }
 ok("doc pages (spec, wallets, networks) render with GitHub links and highlighted code");
 
+// The wallet guide's quick start is generated per known worker: every
+// deployment in known-workers.json must have a tab and a code panel carrying
+// its own address, or the guide is advertising a stale one.
+{
+  const known = JSON.parse(await readFile(`${IMPL}../known-workers.json`, "utf8")).workers;
+  const html = await readFile(`${SITE}dist/wallets/index.html`, "utf8");
+  if (html.includes("WORKER_PICKER")) fail("/wallets/ still contains the picker markers");
+  for (const w of known) {
+    if (!html.includes(`id="worker-tab-${w.id}"`)) fail(`/wallets/ picker has no tab for ${w.id}`);
+    if (!html.includes(`id="worker-panel-${w.id}"`)) fail(`/wallets/ picker has no panel for ${w.id}`);
+    if (!html.includes(w.specifier)) fail(`/wallets/ picker is missing ${w.id}'s specifier address`);
+    const gateway = w.config?.gateways?.[0];
+    if (gateway && !html.includes(gateway)) fail(`/wallets/ ${w.id} sample is missing its config gateway`);
+  }
+  // Without JavaScript the first worker's sample must still be on the page.
+  const openPanels = [...html.matchAll(/id="worker-panel-([\w-]+)"([^>]*)>/g)]
+    .filter(([, , attrs]) => !attrs.includes("hidden"))
+    .map(([, id]) => id);
+  if (openPanels.join() !== known[0].id) {
+    fail(`/wallets/ should open on ${known[0].id} alone, got [${openPanels}]`);
+  }
+  ok(`/wallets/ quick start tabs all ${known.length} known workers, opening on ${known[0].id}`);
+}
+
 // anvil
 const anvilPort = 21000 + Math.floor(Math.random() * 9000);
 const anvil = spawn("anvil", ["--port", String(anvilPort)], { stdio: "ignore" });
@@ -164,6 +188,18 @@ if ((await page.inputValue("#watch")) !== "0x00000000219ab540356cBB839Cbe05303d7
   fail("watch address did not prefill with the beacon deposit contract");
 }
 ok("watch address prefilled with the default");
+
+// The demo's preset picker is driven by the same known-workers.json as the
+// wallet guide: every entry, plus the demo-only "custom" option.
+{
+  const known = JSON.parse(await readFile(`${IMPL}../known-workers.json`, "utf8")).workers;
+  const options = await page.$$eval("#preset option", (os) => os.map((o) => o.value));
+  const want = [...known.map((w) => w.id), "custom"];
+  if (options.join(",") !== want.join(",")) {
+    fail(`demo presets don't match known-workers.json (got ${options}, want ${want})`);
+  }
+  ok(`demo preset picker lists the known workers (${options.join(", ")})`);
+}
 
 await page.fill("#bootstrap", rpc);
 await page.click("#copy");
