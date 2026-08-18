@@ -39,10 +39,10 @@
 //   BENCH_RPC_URL=<url> node bench/run.mjs [--n 50] [--rpc URL] [--out results.json]
 //                      [--summary-md summary.md]
 
-import { spawn } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { chromium } from "playwright";
+import { createServer } from "vite";
 
 const require = createRequire(import.meta.url);
 const KNOWN_WORKERS = require("../../../known-workers.json").workers;
@@ -97,27 +97,24 @@ const pct = (sorted, p) =>
 
 // --- vite dev server: the bench page is dev-only by design, never built ---
 
+// Vite's own API rather than spawning `npx vite` and screen-scraping its
+// stdout for a port. The subprocess version failed in CI with nothing but
+// "did not start within 30s", because a banner that never matched the regex
+// is indistinguishable from a server that never came up — and it needed a
+// detached process group to avoid orphaning the real server behind npx.
+// None of that applies when the server is in-process.
 stage("starting vite…");
-const vite = spawn("npx", ["vite", "--port", "0"], {
-  cwd: new URL("..", import.meta.url).pathname,
-  stdio: ["ignore", "pipe", "pipe"],
-  // Own process group: `npx` runs vite as a child, so killing the npx pid alone
-  // leaves the real server holding its port. Negating the pid kills both.
-  detached: true,
+const SITE_DIR = new URL("..", import.meta.url).pathname;
+const vite = await createServer({
+  configFile: `${SITE_DIR}vite.config.js`,
+  root: `${SITE_DIR}src`,
+  server: { port: 0 },
+  logLevel: "warn",
 });
-cleanups.push(() => { try { process.kill(-vite.pid, "SIGKILL"); } catch { vite.kill("SIGKILL"); } });
-
-const baseUrl = await new Promise((resolve, reject) => {
-  const timer = setTimeout(() => reject(new Error("vite did not start within 30s")), 30_000);
-  let buf = "";
-  vite.stdout.on("data", (b) => {
-    buf += b;
-    const m = buf.match(/https?:\/\/localhost:(\d+)/);
-    if (m) { clearTimeout(timer); resolve(m[0]); }
-  });
-  vite.stderr.on("data", (b) => (buf += b));
-  vite.on("exit", (c) => reject(new Error(`vite exited with ${c}`)));
-}).catch(fail);
+await vite.listen();
+cleanups.push(() => vite.close());
+const baseUrl = vite.resolvedUrls?.local?.[0]?.replace(/\/$/, "");
+if (!baseUrl) fail("vite started but reported no local URL");
 
 stage(`vite up at ${baseUrl}`);
 
