@@ -18,7 +18,7 @@ publishing its specifier, and hosting the bytes. Three deliverables:
 
 ## 1. Author the worker
 
-Start by copying [`impl/passthrough-worker`](https://github.com/privacy-ethereum/anon-rpc/tree/main/impl/passthrough-worker)
+Start by copying [`impl/passthrough-worker`](https://github.com/ethereum/anon-rpc/tree/main/impl/passthrough-worker)
 — a complete, minimal, conforming worker. It deliberately **copies** the
 worker-facing types (`spec-types.ts`) rather than importing them: your worker
 is a standalone artifact, buildable with no dependency on any harness.
@@ -51,7 +51,7 @@ host if the worker dies; none are silently discarded.
 
 Everything your code gets is on the global `anonRpcWorker` (SPEC §7):
 
-- **`kps`** — [KPS](https://privacy-ethereum.github.io/kps/) key-pinned
+- **`kps`** — [KPS](https://ethereum.github.io/kps/) key-pinned
   streams: `dial("<ip>:<port>:<certhash>")` opens secure, multiplexed byte
   streams to a peer identified by a certificate hash. The worker-side API is
   ready-made — the harness bridges the transport, no WebRTC or socket access
@@ -96,7 +96,7 @@ deterministically, commit the toolchain, and publish the source so anyone can
 rebuild and verify the hash. That reproducibility is your users' audit trail.
 
 Test against the reference harness before publishing: point the
-[live demo](https://privacy-ethereum.github.io/anon-rpc/demo/) at your
+[live demo](https://ethereum.github.io/anon-rpc/demo/) at your
 specifier (next step) on a local chain, or adapt the repo's e2e
 (`impl/test/run-e2e.mjs`), which boots workers against mock specifiers.
 
@@ -121,7 +121,7 @@ already has. Whatever update policy your users already trust in you can
 govern which code they run.
 
 For a ready-made starting point,
-[`impl/specifier`](https://github.com/privacy-ethereum/anon-rpc/tree/main/impl/specifier)
+[`impl/specifier`](https://github.com/ethereum/anon-rpc/tree/main/impl/specifier)
 has `WorkerSpecifier.sol`, a deliberately simple single-owner model:
 
 - `setWorker(newHash, newResolvers)` — the owner ships a new version; wallets
@@ -172,13 +172,13 @@ anywhere — so hosting is low-stakes and you should list several:
 - [ ] Specifier deployed; its update governance (who can change the hash, or frozen forever) stated publicly
 - [ ] Two or more resolvers listed, serving byte-identical content
 - [ ] Booted end-to-end via the demo page against your specifier
-- [ ] Listed in [`known-workers.json`](https://github.com/privacy-ethereum/anon-rpc/blob/main/known-workers.json)
+- [ ] Listed in [`known-workers.json`](https://github.com/ethereum/anon-rpc/blob/main/known-workers.json)
       (open a PR) — that file drives the demo's worker picker and the sample in
       the wallet guide, so a listing is how wallet authors find you. Include a
       `configNote` for anything shared or provisional, like a demo endpoint.
 
 ## Reference
 
-- [Specification](https://privacy-ethereum.github.io/anon-rpc/spec/) — §3.2
+- [Specification](https://ethereum.github.io/anon-rpc/spec/) — §3.2
   worker conformance, §4 identity, §7–§13 the capability API in full.
 - [Wallet integration guide](integrate-wallet.md) — what the other side sees.

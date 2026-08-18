@@ -31,7 +31,7 @@
         <a href="#integrate">Guides</a>
         <a href="#how">How it works</a>
         <a href="spec/">Spec</a>
-        <a class="gh" href="https://github.com/privacy-ethereum/anon-rpc" target="_blank" rel="noopener" aria-label="View source on GitHub" title="View source on GitHub">
+        <a class="gh" href="https://github.com/ethereum/anon-rpc" target="_blank" rel="noopener" aria-label="View source on GitHub" title="View source on GitHub">
           <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.92.58.1.79-.25.79-.56 0-.28-.01-1.02-.02-2-3.2.69-3.88-1.54-3.88-1.54-.52-1.33-1.28-1.68-1.28-1.68-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.71 1.26 3.37.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.18 1.18.92-.26 1.91-.39 2.89-.39.98 0 1.97.13 2.89.39 2.21-1.49 3.18-1.18 3.18-1.18.63 1.58.23 2.75.11 3.04.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.4-5.25 5.68.41.35.78 1.05.78 2.12 0 1.53-.01 2.76-.01 3.14 0 .31.21.67.8.56C20.71 21.39 24 17.08 24 12c0-6.35-5.15-11.5-11.5-11.5z"/></svg>
         </a>
         <a class="btn sm nav-cta" href="demo/">Live demo →</a>
@@ -90,7 +90,7 @@
         <p>With <strong>anon-rpc</strong>, requests can be:</p>
         <ul>
           <li>unlinked from your IP address,</li>
-          <li>connected through domainless P2P nodes (<a href="https://privacy-ethereum.github.io/kps/" target="_blank" rel="noopener">KPS</a>),</li>
+          <li>connected through domainless P2P nodes (<a href="https://ethereum.github.io/kps/" target="_blank" rel="noopener">KPS</a>),</li>
           <li>switched to a better network at any time.</li>
         </ul>
       </div>
@@ -117,7 +117,7 @@
         <div class="card step">
           <div class="step-num">3</div>
           <h3>Restricted capabilities</h3>
-          <p>The network's client code is sandboxed away from your wallet and its keys, cookies, etc. Instead it uses a messaging channel to accept <code>fetch</code> calls, connect via <a href="https://privacy-ethereum.github.io/kps/" target="_blank" rel="noopener">KPS</a>, provide logs, and access its scoped storage.</p>
+          <p>The network's client code is sandboxed away from your wallet and its keys, cookies, etc. Instead it uses a messaging channel to accept <code>fetch</code> calls, connect via <a href="https://ethereum.github.io/kps/" target="_blank" rel="noopener">KPS</a>, provide logs, and access its scoped storage.</p>
         </div>
       </div>
     </section>
@@ -131,7 +131,7 @@
       <div class="features">
         <div class="card feature"><div class="ic">🔏</div><h3>Hash-pinned identity</h3><p>The anon-client is content-addressed via an on-chain specifier. No resolver, CDN, or mirror is trusted — only bytes matching the hash execute.</p></div>
         <div class="card feature"><div class="ic">🧱</div><h3>Null-origin sandbox</h3><p>The worker runs in a Web Worker inside a sandboxed, null-origin iframe: no DOM, no cookies, no wallet keys, no host identity.</p></div>
-        <div class="card feature"><div class="ic">📡</div><h3><a href="https://privacy-ethereum.github.io/kps/" target="_blank" rel="noopener">KPS</a> transport built in</h3><p>Key-pinned streams to any peer by certificate hash — WebRTC in the browser, QUIC natively — so the worker never needs CA-blessed network access.</p></div>
+        <div class="card feature"><div class="ic">📡</div><h3><a href="https://ethereum.github.io/kps/" target="_blank" rel="noopener">KPS</a> transport built in</h3><p>Key-pinned streams to any peer by certificate hash — WebRTC in the browser, QUIC natively — so the worker never needs CA-blessed network access.</p></div>
         <div class="card feature"><div class="ic">📬</div><h3>Ordered call discipline</h3><p>Inbound fetch calls queue with backpressure: ordered, never dropped, delivered one at a time on the worker's terms.</p></div>
         <div class="card feature"><div class="ic">🗄️</div><h3>Scoped storage</h3><p>Async binary storage namespaced to the specifier address. A worker can persist state; it can't read anyone else's.</p></div>
         <div class="card feature"><div class="ic">🔁</div><h3>Updatable, freezable</h3><p>The specifier owner can ship new worker versions on-chain — or renounce ownership and freeze the pinned hash forever.</p></div>
@@ -157,7 +157,7 @@
           <h3><code>@anon-rpc/browser-harness</code> <span class="arrow">→</span></h3>
           <p>The reference browser harness on npm — specifier resolution, hash verification, sandboxing, and the capability bridge.</p>
         </a>
-        <a class="card tool-card" href="https://github.com/privacy-ethereum/anon-rpc" target="_blank" rel="noopener">
+        <a class="card tool-card" href="https://github.com/ethereum/anon-rpc" target="_blank" rel="noopener">
           <h3>GitHub <span class="arrow">→</span></h3>
           <p>Spec, reference implementation, worker template, and the on-chain publishing tooling.</p>
         </a>
@@ -168,7 +168,7 @@
     <section class="cta-final wrap">
       <div class="cta-row">
         <a class="btn" href="demo/">Launch the demo →</a>
-        <a class="btn secondary" href="https://github.com/privacy-ethereum/anon-rpc" target="_blank" rel="noopener">Read the docs</a>
+        <a class="btn secondary" href="https://github.com/ethereum/anon-rpc" target="_blank" rel="noopener">Read the docs</a>
       </div>
     </section>
   </main>
@@ -177,7 +177,7 @@
     <div class="footer-inner">
       <span>anon-rpc — MIT © Ethereum Foundation</span>
       <span class="spacer"></span>
-      <a href="https://github.com/privacy-ethereum/anon-rpc" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/ethereum/anon-rpc" target="_blank" rel="noopener">GitHub</a>
       <a href="spec/">Spec</a>
       <a href="https://www.npmjs.com/package/@anon-rpc/browser-harness" target="_blank" rel="noopener">npm</a>
     </div>

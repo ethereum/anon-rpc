@@ -1,10 +1,10 @@
 # @anon-rpc/browser-harness
 
-A browser harness for [anon-rpc](https://github.com/privacy-ethereum/anon-rpc)
+A browser harness for [anon-rpc](https://github.com/ethereum/anon-rpc)
 — a standard that lets a wallet or application make **anonymized RPC requests**
 by running untrusted, hash-pinned anon-client code inside a sandboxed worker.
 
-Implements the [anon-rpc specification](https://privacy-ethereum.github.io/anon-rpc/spec/)
+Implements the [anon-rpc specification](https://ethereum.github.io/anon-rpc/spec/)
 version **0.3.0**. (The package version is kept `>=` the implemented spec
 version; a package release without a spec change bumps past it.)
 
@@ -17,7 +17,7 @@ The harness:
 - runs it in a **Web Worker inside a null-origin sandboxed iframe**, with no
   ambient access to your DOM, storage, cookies, or keys;
 - grants it a small, explicit capability API — inbound fetch calls, a
-  [KPS](https://privacy-ethereum.github.io/kps/) key-pinned transport
+  [KPS](https://ethereum.github.io/kps/) key-pinned transport
   (bridged so the worker never touches WebRTC), persistent storage
   (IndexedDB on the host origin, namespaced per specifier), and logging;
 - hands you back one thing: an anonymized `fetch`.
@@ -65,9 +65,9 @@ worker.close(); // tears down the iframe and worker
   package.
 - The worker-facing capability API (`anonRpcWorker`) and all conformance
   requirements are defined in the
-  [specification](https://github.com/privacy-ethereum/anon-rpc/blob/main/SPEC.md).
+  [specification](https://github.com/ethereum/anon-rpc/blob/main/SPEC.md).
   A template anon-client to copy lives in
-  [`impl/passthrough-worker`](https://github.com/privacy-ethereum/anon-rpc/tree/main/impl/passthrough-worker).
+  [`impl/passthrough-worker`](https://github.com/ethereum/anon-rpc/tree/main/impl/passthrough-worker).
 - Status: prototype-grade reference implementation of a draft spec; interfaces
   track the spec and may change.
 

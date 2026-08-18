@@ -22,7 +22,7 @@ npm install @anon-rpc/browser-harness
 ```
 
 Browser-only: the sandbox is a null-origin iframe and the built-in
-[KPS](https://privacy-ethereum.github.io/kps/) transport runs over WebRTC. A
+[KPS](https://ethereum.github.io/kps/) transport runs over WebRTC. A
 native harness would be a separate package.
 
 ## Quick start
@@ -68,8 +68,8 @@ The address above is the passthrough worker, which fulfils calls with an
 ordinary `fetch` — it exercises the sandbox and hash pinning without
 anonymizing anything. Every deployment we know of, and the config each one
 expects, is listed in
-[known-workers.json](https://github.com/privacy-ethereum/anon-rpc/blob/main/known-workers.json);
-the [live demo](https://privacy-ethereum.github.io/anon-rpc/demo/) runs any of
+[known-workers.json](https://github.com/ethereum/anon-rpc/blob/main/known-workers.json);
+the [live demo](https://ethereum.github.io/anon-rpc/demo/) runs any of
 them.
 
 <!--WORKER_PICKER:END-->
@@ -149,13 +149,13 @@ Practical notes:
 
 ## Try it
 
-The [live demo](https://privacy-ethereum.github.io/anon-rpc/demo/) is this
+The [live demo](https://ethereum.github.io/anon-rpc/demo/) is this
 exact integration: paste a bootstrap RPC URL and a specifier address, and
 watch an ETH balance stream through the sandboxed worker.
 
 ## Reference
 
-- [Specification](https://privacy-ethereum.github.io/anon-rpc/spec/) —
+- [Specification](https://ethereum.github.io/anon-rpc/spec/) —
   normative behavior for everything above (§5 host API, §6 isolation, §12
   errors).
 - [`@anon-rpc/browser-harness`](https://www.npmjs.com/package/@anon-rpc/browser-harness)
