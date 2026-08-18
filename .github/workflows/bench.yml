@@ -70,10 +70,12 @@ jobs:
 
       # Runs even on failure: a run where tor-js could not boot is exactly the
       # run whose summary someone needs to read.
+      # tee, not >>: the summary tab does not exist on mobile, so the table has
+      # to reach the log too — that is the one view every client renders.
       - name: Publish summary
         if: always()
         working-directory: impl/site
-        run: cat bench-summary.md >> "$GITHUB_STEP_SUMMARY" || true
+        run: tee -a "$GITHUB_STEP_SUMMARY" < bench-summary.md || true
 
       - name: Upload raw samples
         if: always()

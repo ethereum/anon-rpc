@@ -291,6 +291,26 @@ if (SUMMARY_MD) {
   console.log(`summary → ${SUMMARY_MD}`);
 }
 
+// GitHub renders job summaries only on desktop — on mobile the summary tab is
+// simply absent. Annotations DO show, at the top of the run page, so the
+// headline goes out as a notice as well. Kept to one line: annotations do not
+// wrap, and %0A-encoded newlines render as a cramped block.
+if (process.env.GITHUB_ACTIONS) {
+  const p50 = (id) => {
+    const r = summary.find((x) => x.arm === id);
+    return !r || Number.isNaN(r.p50) ? `${id} —` : `${id} ${r.p50.toFixed(0)}ms`;
+  };
+  const boot = boots.find((b) => b.id === "tor-js");
+  const bootTxt = boot?.ok ? `, boot ${(boot.bootMs / 1000).toFixed(1)}s` : "";
+  const dropped = summary.reduce((n, r) => n + r.discarded, 0);
+  console.log(
+    `::notice title=bench p50 (n=${N})::` +
+    summary.map((r) => p50(r.arm)).join("  ·  ") + bootTxt +
+    (dropped ? `  ·  ${dropped} discarded` : "") +
+    "  ·  runner network, not a user's — ratios are not user-facing",
+  );
+}
+
 console.log("\nnote: bandwidth is not measured — tor-js's bytes ride a WebRTC data");
 console.log("channel inside a null-origin iframe, so they need gateway-side counters.\n");
 
