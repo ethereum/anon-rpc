@@ -1,0 +1,82 @@
+name: bench
+
+# Deliberately NOT on push or pull_request. This is a measurement, not a test:
+# it has no pass/fail, it takes minutes, and it depends on live mainnet, a
+# public RPC, the demo KPS gateway and the Tor network — so on a PR it would go
+# red for reasons that have nothing to do with the diff. Run it on demand, and
+# on a schedule so drift over time is visible.
+on:
+  workflow_dispatch:
+    inputs:
+      n:
+        description: Samples per arm
+        default: "50"
+      rpc:
+        description: RPC endpoint override (blank uses the BENCH_RPC_URL secret)
+        default: ""
+  schedule:
+    # An arbitrary minute, not the top of the hour: GitHub queues scheduled jobs
+    # hardest at :00, and a benchmark that runs while the runner fleet is busiest
+    # measures the fleet as much as the code. Still Monday, still well before the
+    # team weekly, so the numbers are fresh when anyone asks.
+    #
+    # Note this samples one time of day. If week-to-week comparisons start
+    # looking like time-of-day artefacts rather than real drift, spread it across
+    # several cron entries rather than reading more into a single slot.
+    - cron: "37 9 * * 1"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: impl
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: impl/package-lock.json
+
+      - run: npm ci
+
+      - run: npx playwright install --with-deps chromium
+
+      - name: Run benchmark
+        working-directory: impl/site
+        env:
+          # No endpoint is committed. A manual run may override the secret via
+          # the rpc input; scheduled runs always use the secret.
+          BENCH_RPC_URL: ${{ inputs.rpc || secrets.BENCH_RPC_URL }}
+        run: |
+          node bench/run.mjs \
+            --n "${{ inputs.n || 50 }}" \
+            --out bench-results.json \
+            --summary-md bench-summary.md
+
+      # Runs even on failure: a run where tor-js could not boot is exactly the
+      # run whose summary someone needs to read.
+      - name: Publish summary
+        if: always()
+        working-directory: impl/site
+        run: cat bench-summary.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Upload raw samples
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results-${{ github.run_number }}
+          path: |
+            impl/site/bench-results.json
+            impl/site/bench-summary.md
+          if-no-files-found: warn
+          # Long enough to compare against a run from a few months ago, which is
+          # the point of the schedule.
+          retention-days: 90
