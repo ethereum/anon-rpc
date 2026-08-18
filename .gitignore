@@ -7,3 +7,9 @@ dist/
 .swp
 *.swp
 *.swo
+
+# Benchmark output: a run is a snapshot of one machine, one gateway and one
+# moment, so it belongs in the CI artifact rather than in the tree.
+bench-results*.json
+bench-summary*.md
+impl/site/bench/results-*.json
