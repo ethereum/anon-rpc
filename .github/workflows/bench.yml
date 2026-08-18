@@ -47,6 +47,13 @@ jobs:
 
       - run: npm ci
 
+      # The bench page imports @anon-rpc/browser-harness, whose package main is
+      # dist/host.js — a build artifact. Without this the dev server 500s on the
+      # import and the page never defines window.__bench, which surfaces 30s
+      # later as an unrelated-looking waitForFunction timeout. ci.yml gets away
+      # without an explicit build only because its `npm test` runs one itself.
+      - run: npm run build
+
       - run: npx playwright install --with-deps chromium
 
       - name: Run benchmark
