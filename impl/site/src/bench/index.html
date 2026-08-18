@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>anon-rpc bench harness</title>
+    <meta name="robots" content="noindex" />
+  </head>
+  <body>
+    <!--
+      Internal measurement page. Deliberately absent from vite.config.js's
+      rollupOptions.input, so `vite dev` serves it and `vite build` never emits
+      it — it is not part of the published site.
+
+      There is no UI: bench/run.mjs drives window.__bench over CDP.
+    -->
+    <pre id="log">anon-rpc bench harness — driven by bench/run.mjs</pre>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
