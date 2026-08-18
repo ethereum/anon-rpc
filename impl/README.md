@@ -24,7 +24,7 @@ The harness runs untrusted, hash-pinned worker code inside a Web Worker in a nul
 sandboxed iframe (§6), and exposes the `AnonRpcWorkerApi` capability surface
 (§7–§13) across the `postMessage` boundary — including a **real KPS transport**
 ([`@kpstreams/webrtc-client`](https://www.npmjs.com/package/@kpstreams/webrtc-client),
-from [KPS](https://privacy-ethereum.github.io/kps/)) bridged
+from [KPS](https://ethereum.github.io/kps/)) bridged
 from the host to the worker.
 
 ## Architecture
@@ -77,7 +77,7 @@ the worker never needs WebRTC itself — the harness owns the transport.
 - Node 20+. Everything KPS comes from npm: the harness uses
   `@kpstreams/webrtc-client`, and the e2e runs its echo peer in-process via
   `@kpstreams/server` — no Go toolchain or
-  [kps](https://github.com/privacy-ethereum/kps) checkout required.
+  [kps](https://github.com/ethereum/kps) checkout required.
 - [Foundry](https://getfoundry.sh) only for the [specifier/](specifier/)
   subproject (contract build/tests and on-chain publishing); everything else
   works without it, and the specifier tests skip gracefully when it's absent.

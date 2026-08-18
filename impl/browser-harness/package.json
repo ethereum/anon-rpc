@@ -7,10 +7,10 @@
   "sideEffects": false,
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/privacy-ethereum/anon-rpc.git",
+    "url": "git+https://github.com/ethereum/anon-rpc.git",
     "directory": "impl/browser-harness"
   },
-  "homepage": "https://github.com/privacy-ethereum/anon-rpc",
+  "homepage": "https://github.com/ethereum/anon-rpc",
   "keywords": [
     "anon-rpc",
     "ethereum",

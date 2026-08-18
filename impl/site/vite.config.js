@@ -163,7 +163,7 @@ async function renderDocMarkdown(slug) {
   // Put the GitHub link on the title line: wrap the document's <h1> in a flex
   // row with the button, which flexbox centers at any viewport/font size.
   const ghPath = file.replace("../../", "");
-  const gh = `<a class="ghost" href="https://github.com/privacy-ethereum/anon-rpc/blob/main/${ghPath}" target="_blank" rel="noopener">View on GitHub →</a>`;
+  const gh = `<a class="ghost" href="https://github.com/ethereum/anon-rpc/blob/main/${ghPath}" target="_blank" rel="noopener">View on GitHub →</a>`;
   return html.replace(
     /<h1([^>]*)>([\s\S]*?)<\/h1>/,
     (_m, attrs, inner) => `<div class="doc-head"><h1${attrs}>${inner}</h1>${gh}</div>`,
