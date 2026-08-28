@@ -1,0 +1,49 @@
+// Who's adopting anon-rpc. Drives the demo's worker picker, the quick start in
+// docs/integrate-wallet.md, and https://ethereum.github.io/anon-rpc/adopters/.
+// Adding yourself is a PR against this file alone; merging rebuilds the site.
+{
+  // Anonymizing networks: a client bundle pinned on-chain by an IWorkerSpecifier
+  // (SPEC.md §4). `label` splits on the em dash into name + tagline. `kind` is
+  // "network" if it really anonymizes, "reference" if it only demonstrates the
+  // mechanism — the page badges the two differently. `id` appears in
+  // /demo/?worker=<id>, so renaming one breaks published links. The first entry
+  // is the demo's default and the sample the wallet guide shows.
+  workers: [
+    {
+      id: "passthrough",
+      label: "Passthrough — plain fetch (no anonymization)",
+      specifier: "0x4fd77be300f31c5fe6ab266d35d27750a3478d27",
+      kind: "reference",
+      note: "The minimal reference worker: it fulfils calls with an ordinary fetch, so requests are not anonymized. It demonstrates the sandbox and hash pinning, not privacy.",
+    },
+    {
+      id: "tor-js",
+      label: "tor-js — fetch over Tor",
+      specifier: "0x700dA3193D35fA54Cd3fBf29B66f2a2A0385659e",
+      kind: "network",
+      note: "Runs a full Tor client compiled to WebAssembly inside the sandbox, building circuits in the browser. Expect a bootstrap delay before the first response, and higher per-request latency than a direct fetch, since traffic is relayed through multiple hops.",
+
+      // Optional. ONE config (§7.1) that works — not the config: the field is
+      // network-defined and opaque to the harness, so document your own schema
+      // and expect wallets to write their own values. `exampleConfigNote`
+      // renders as a caveat beside it; `url` links the entry's heading.
+      exampleConfig: {
+        gateways: ["170.64.236.147:12298:uEiBHwUMNRTetrbqScahm81Di57Xv2OphNrx-CurJGOq3ww"],
+      },
+      exampleConfigNote: "Demonstration gateway only: limited capacity, and it may disappear at any time — run your own for anything real. Browsers cannot open the raw TCP that Tor uses, so gateways act as blind KPS relays into the Tor network.",
+    },
+  ],
+
+  // Wallets and apps shipping anon-rpc to users (the hosts of SPEC.md §2). None
+  // yet, and the page says so rather than pretending otherwise. Copy this:
+  walletsAndApps: [
+    // {
+    //   id: "example-wallet",
+    //   label: "Example Wallet",
+    //   kind: "wallet", // or "app"
+    //   url: "https://example.org",
+    //   note: "What it is, and how it uses anon-rpc.",
+    //   workers: ["tor-js"], // optional; cross-linked to the entries above
+    // },
+  ],
+}

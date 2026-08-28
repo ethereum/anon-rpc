@@ -3,7 +3,7 @@
 // the sandboxed worker's anonymized fetch.
 
 import { AnonRpcWorker } from "@anon-rpc/browser-harness";
-import knownWorkers from "../../../../known-workers.json";
+import adoptersFile from "../../../../adopters.json5";
 
 const SETTINGS_KEY = "anon-rpc-demo-settings";
 const POLL_MS = 12_000; // ~mainnet block time
@@ -12,22 +12,23 @@ const DEFAULT_WATCH = "0x00000000219ab540356cBB839Cbe05303d7705Fa";
 
 /* --- worker presets --- */
 
-// Workers published on mainnet, from the repo's known-workers.json — the same
+// Workers published on mainnet, from the repo's adopters.json5 — the same
 // list the wallet integration guide shows. A preset only prefills the fields
 // below; any specifier address can be pasted in by hand, which switches the
 // picker to "custom".
 //
-// `gateway` is the demo's flattened view of worker config (§7.1): the workers
-// listed so far take a single KPS gateway, which this page exposes as an
-// editable field. `undefined` means the worker takes no config, and the field
-// is hidden for it.
+// `config` is the JSON text prefilled into the config textarea — §7.1 config is
+// network-defined and opaque to the harness, so this page treats it as opaque
+// too: it edits and parses JSON without knowing what any key means. A worker
+// with an example config gets it as its starting value; every other preset
+// starts blank.
 type Preset = {
   id: string;
   label: string;
   specifier: string;
-  gateway?: string;
+  config: string;
   note?: string;
-  gatewayNote?: string;
+  configNote?: string;
 };
 
 type KnownWorker = {
@@ -35,25 +36,52 @@ type KnownWorker = {
   label: string;
   specifier: string;
   note?: string;
-  config?: { gateways?: string[] };
-  configNote?: string;
+  exampleConfig?: unknown;
+  exampleConfigNote?: string;
 };
 
+/**
+ * JSON.stringify(value, null, 2), except that an array of primitives stays on
+ * one line. Plain stringify explodes `["…"]` across three lines, turning a
+ * one-key config into a five-line block that then soft-wraps in the box; this
+ * prints it the way it is written by hand in adopters.json5.
+ */
+function prettyJson(value: unknown, indent = ""): string {
+  const inner = indent + "  ";
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "[]";
+    if (value.every((v) => v === null || typeof v !== "object")) {
+      return `[${value.map((v) => JSON.stringify(v)).join(", ")}]`;
+    }
+    return `[\n${value.map((v) => inner + prettyJson(v, inner)).join(",\n")}\n${indent}]`;
+  }
+  if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value);
+    if (entries.length === 0) return "{}";
+    const body = entries
+      .map(([k, v]) => `${inner}${JSON.stringify(k)}: ${prettyJson(v, inner)}`)
+      .join(",\n");
+    return `{\n${body}\n${indent}}`;
+  }
+  // undefined has no JSON form; a config carrying one is malformed either way.
+  return JSON.stringify(value) ?? "null";
+}
+
 const PRESETS: Preset[] = [
-  ...(knownWorkers.workers as KnownWorker[]).map((w) => ({
+  ...(adoptersFile.workers as KnownWorker[]).map((w) => ({
     id: w.id,
     label: w.label,
     specifier: w.specifier,
-    gateway: w.config?.gateways?.[0],
+    config: w.exampleConfig === undefined ? "" : prettyJson(w.exampleConfig),
     note: w.note,
-    gatewayNote: w.configNote,
+    configNote: w.exampleConfigNote,
   })),
   {
     id: "custom",
     label: "Custom — paste a specifier",
     specifier: "",
-    gateway: "",
-    note: "Any IWorkerSpecifier address. Supply a gateway only if that worker expects one.",
+    config: "",
+    note: "Any IWorkerSpecifier address. Add whatever config that worker expects, if any.",
   },
 ];
 
@@ -78,9 +106,8 @@ const els = {
   workerRpc: $<HTMLInputElement>("worker-rpc"),
   copy: $<HTMLButtonElement>("copy"),
   specifier: $<HTMLInputElement>("specifier"),
-  gateway: $<HTMLInputElement>("gateway"),
-  gatewayField: $<HTMLDivElement>("gateway-field"),
-  gatewayNote: $<HTMLParagraphElement>("gateway-note"),
+  config: $<HTMLTextAreaElement>("config"),
+  configNote: $<HTMLParagraphElement>("config-note"),
   watch: $<HTMLInputElement>("watch"),
   toggle: $<HTMLButtonElement>("toggle"),
   pill: $<HTMLSpanElement>("pill"),
@@ -97,15 +124,16 @@ type Settings = {
   bootstrap: string;
   workerRpc: string;
   specifier: string;
-  gateway: string;
+  config: string;
   watch: string;
   // Which preset the picker shows. Persisted but not one of `fields` below: it
   // backs a <select>, and the specifier address is what actually decides it.
   preset?: string;
 };
-// The text inputs, in the order they appear. Driven generically for prefill and
+// The text controls, in the order they appear (the config one is a textarea, but
+// .value and .disabled are all this needs). Driven generically for prefill and
 // for disabling while the watcher runs.
-const fields = ["bootstrap", "workerRpc", "specifier", "gateway", "watch"] as const;
+const fields = ["bootstrap", "workerRpc", "specifier", "config", "watch"] as const;
 
 function readSaved(): Partial<Settings> {
   try {
@@ -128,13 +156,12 @@ for (const p of PRESETS) {
   els.preset.append(opt);
 }
 
-/** Show the note and gateway row that match the selected preset. */
+/** Show the notes that belong to the selected preset. */
 function renderPreset(p: Preset): void {
   els.presetNote.textContent = p.note ?? "";
-  // A preset with no `gateway` key describes a worker that takes no config.
-  const takesGateway = p.gateway !== undefined;
-  els.gatewayField.style.display = takesGateway ? "" : "none";
-  els.gatewayNote.textContent = takesGateway ? (p.gatewayNote ?? "") : "";
+  // Only a caveat about the example config, if the entry carries one; the
+  // generic "what this field is" hint is static in the markup.
+  els.configNote.textContent = p.configNote ?? "";
 }
 
 /** Adopt a preset: fill the fields it prescribes, then re-render. */
@@ -143,11 +170,10 @@ function applyPreset(p: Preset): void {
     els.specifier.value = p.specifier;
     persist({ specifier: p.specifier });
   }
-  if (p.gateway !== undefined) {
-    els.gateway.value = p.gateway;
-    persist({ gateway: p.gateway });
-  }
-  persist({ preset: p.id });
+  // Always assigned, blank included: switching preset must not leave the
+  // previous worker's config behind for this one to be started with.
+  els.config.value = p.config;
+  persist({ config: p.config, preset: p.id });
   renderPreset(p);
 }
 
@@ -155,19 +181,29 @@ const saved = readSaved();
 for (const f of fields) els[f].value = saved[f] ?? "";
 if (!els.watch.value) els.watch.value = DEFAULT_WATCH;
 
-// The specifier address is the source of truth for which preset is showing: a
-// pasted address that matches a known one selects it, anything else is custom.
-// That keeps the picker honest when settings are restored or hand-edited.
-const initial = els.specifier.value
-  ? (presetBySpecifier(els.specifier.value) ?? CUSTOM)
-  : presetById(saved.preset ?? PRESETS[0].id);
+// Arriving from a link that names a worker — the /adopters/ directory links
+// every entry here as `?worker=<id>` — that choice wins over restored settings:
+// following the link is the more recent statement of intent. An id that isn't
+// known is ignored rather than landing on "custom".
+const linked = new URLSearchParams(location.search).get("worker");
+const linkedPreset = linked ? PRESETS.find((p) => p.id === linked) : undefined;
+
+// Otherwise the specifier address is the source of truth for which preset is
+// showing: a pasted address that matches a known one selects it, anything else
+// is custom. That keeps the picker honest when settings are restored or
+// hand-edited.
+const initial =
+  linkedPreset ??
+  (els.specifier.value
+    ? (presetBySpecifier(els.specifier.value) ?? CUSTOM)
+    : presetById(saved.preset ?? PRESETS[0].id));
 els.preset.value = initial.id;
-if (!els.specifier.value) applyPreset(initial);
+if (linkedPreset || !els.specifier.value) applyPreset(initial);
 else renderPreset(initial);
 
 els.preset.addEventListener("change", () => applyPreset(presetById(els.preset.value)));
 
-// Specifier, gateway and watch address persist as typed. The RPC URLs
+// Specifier, config and watch address persist as typed. The RPC URLs
 // deliberately do NOT: they are only saved once proven — bootstrap when a
 // worker boots through it, worker RPC when a balance query succeeds — so a typo
 // never becomes the sticky default.
@@ -182,7 +218,7 @@ els.specifier.addEventListener("input", () => {
     renderPreset(match);
   }
 });
-els.gateway.addEventListener("input", () => persist({ gateway: els.gateway.value.trim() }));
+els.config.addEventListener("input", () => persist({ config: els.config.value }));
 els.watch.addEventListener("input", () => persist({ watch: els.watch.value.trim() }));
 
 els.copy.addEventListener("click", () => {
@@ -273,22 +309,25 @@ function validate(): Settings {
   if (!isUrl(s.workerRpc)) throw new Error("worker RPC URL must be http(s)");
   if (!isAddr(s.specifier)) throw new Error("specifier must be a 0x… address");
   if (!isAddr(s.watch)) throw new Error("watch address must be a 0x… address");
-  // Only checked when the shown preset takes one: a mistyped gateway would
-  // otherwise surface as an opaque worker startup failure.
-  const p = presetById(els.preset.value);
-  if (p.gateway !== undefined && s.gateway) {
-    if (!/^(\[[^\]]+\]|[^:]+):\d+:[^:]+$/.test(s.gateway)) {
-      throw new Error("gateway must be ip:port:certhash (IPv6 bracketed)");
-    }
-  }
+  // Called for its throw: unparseable JSON would otherwise surface as an opaque
+  // worker startup failure much later. The value itself is taken at boot.
+  parseConfig(s.config);
   return s;
 }
 
-/** Worker-specific config (§7.1), or undefined when the worker takes none. */
-function workerConfig(s: Settings): unknown {
-  const p = presetById(els.preset.value);
-  if (p.gateway === undefined || !s.gateway) return undefined;
-  return { gateways: [s.gateway] };
+/**
+ * Worker config (§7.1) as the textarea holds it. The demo never inspects the
+ * contents — the field is network-defined and the harness passes it through
+ * untouched — so JSON validity is the only thing checked here. Blank means the
+ * worker is started with no config at all, not with an empty object.
+ */
+function parseConfig(text: string): unknown {
+  if (!text.trim()) return undefined;
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    throw new Error(`config must be valid JSON: ${(e as Error).message}`);
+  }
 }
 
 async function tick(s: Settings): Promise<void> {
@@ -357,7 +396,7 @@ async function start(): Promise<void> {
   const bootstrapCall = jsonRpc(fetch, s.bootstrap);
   worker = new AnonRpcWorker({
     address: s.specifier,
-    config: workerConfig(s),
+    config: parseConfig(s.config),
     preExisting: {
       rpcProvider: {
         request: ({ method, params }) => bootstrapCall(method, (params as unknown[]) ?? []),

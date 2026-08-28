@@ -14,6 +14,7 @@
     "@anon-rpc/browser-harness": "*"
   },
   "devDependencies": {
+    "json5": "^2.2.3",
     "marked": "^18.0.7",
     "marked-shiki": "^1.2.1",
     "shiki": "^4.3.1",

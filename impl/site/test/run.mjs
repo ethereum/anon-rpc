@@ -9,6 +9,7 @@
 import { spawn, execSync } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
 import { createServer } from "node:http";
+import JSON5 from "json5";
 import { chromium } from "playwright";
 
 const HERE = new URL(".", import.meta.url).pathname; // impl/site/test/
@@ -68,18 +69,46 @@ for (const [slug, heading] of docPages) {
 }
 ok("doc pages (spec, wallets, networks) render with GitHub links and highlighted code");
 
+// The header is generated from one source rather than copied into each shell.
+// It was copied before, and had already drifted — three pages linked "Spec" at
+// themselves — so the sameness is worth asserting rather than trusting.
+{
+  const pages = ["index", "demo", "spec", "wallets", "networks", "adopters"];
+  let canonical;
+  for (const slug of pages) {
+    const html = await readFile(
+      `${SITE}dist/${slug === "index" ? "index.html" : `${slug}/index.html`}`,
+      "utf8",
+    );
+    if (html.includes("<!--NAV-->")) fail(`/${slug} still contains the unreplaced NAV slot`);
+    const nav = html.match(/<nav class="nav-links">[\s\S]*?<\/nav>/)?.[0];
+    if (!nav) fail(`/${slug} has no nav`);
+    // The depth prefix and which link is current are the only legitimate
+    // per-page differences; normalize both away and the rest must be identical.
+    const shape = nav.replaceAll("../", "").replaceAll(' aria-current="page"', "");
+    canonical ??= { slug, shape };
+    if (shape !== canonical.shape) fail(`/${slug} nav differs from /${canonical.slug} nav`);
+    // The landing page is reached by the brand mark, so it has no nav link of
+    // its own to mark; every other page must mark exactly one.
+    const marked = [...nav.matchAll(/aria-current="page"/g)].length;
+    const want = slug === "index" ? 0 : 1;
+    if (marked !== want) fail(`/${slug} marks ${marked} nav links current, want ${want}`);
+  }
+  ok(`all ${pages.length} pages share one generated nav, each marking its own link current`);
+}
+
 // The wallet guide's quick start is generated per known worker: every
-// deployment in known-workers.json must have a tab and a code panel carrying
+// deployment in adopters.json5 must have a tab and a code panel carrying
 // its own address, or the guide is advertising a stale one.
 {
-  const known = JSON.parse(await readFile(`${IMPL}../known-workers.json`, "utf8")).workers;
+  const known = JSON5.parse(await readFile(`${IMPL}../adopters.json5`, "utf8")).workers;
   const html = await readFile(`${SITE}dist/wallets/index.html`, "utf8");
   if (html.includes("WORKER_PICKER")) fail("/wallets/ still contains the picker markers");
   for (const w of known) {
     if (!html.includes(`id="worker-tab-${w.id}"`)) fail(`/wallets/ picker has no tab for ${w.id}`);
     if (!html.includes(`id="worker-panel-${w.id}"`)) fail(`/wallets/ picker has no panel for ${w.id}`);
     if (!html.includes(w.specifier)) fail(`/wallets/ picker is missing ${w.id}'s specifier address`);
-    const gateway = w.config?.gateways?.[0];
+    const gateway = w.exampleConfig?.gateways?.[0];
     if (gateway && !html.includes(gateway)) fail(`/wallets/ ${w.id} sample is missing its config gateway`);
   }
   // Without JavaScript the first worker's sample must still be on the page.
@@ -90,6 +119,40 @@ ok("doc pages (spec, wallets, networks) render with GitHub links and highlighted
     fail(`/wallets/ should open on ${known[0].id} alone, got [${openPanels}]`);
   }
   ok(`/wallets/ quick start tabs all ${known.length} known workers, opening on ${known[0].id}`);
+}
+
+// The adopters directory is the third consumer of adopters.json5. It is the
+// page that advertises addresses to strangers, so a missing or stale entry here
+// is worse than on the other two: assert every field it publishes.
+{
+  const file = JSON5.parse(await readFile(`${IMPL}../adopters.json5`, "utf8"));
+  const html = await readFile(`${SITE}dist/adopters/index.html`, "utf8");
+  if (html.includes("<!--ADOPTERS_HTML-->")) fail("/adopters/ still contains the unreplaced slot");
+  for (const w of file.workers) {
+    if (!html.includes(`id="worker-${w.id}"`)) fail(`/adopters/ has no entry for ${w.id}`);
+    if (!html.includes(w.specifier)) fail(`/adopters/ is missing ${w.id}'s specifier address`);
+    if (!html.includes(`?worker=${w.id}`)) fail(`/adopters/ has no demo link for ${w.id}`);
+    const gateway = w.exampleConfig?.gateways?.[0];
+    if (gateway && !html.includes(gateway)) fail(`/adopters/ omits ${w.id}'s config gateway`);
+    // A worker that does not anonymize must be labelled as such on this page.
+    const badge = w.kind === "reference" ? "Reference worker" : "Anonymizing network";
+    if (!html.includes(badge)) fail(`/adopters/ is missing the "${badge}" badge for ${w.id}`);
+  }
+  const listed = [...html.matchAll(/id="adopter-([\w-]+)"/g)].map(([, id]) => id);
+  if (listed.join() !== file.walletsAndApps.map((a) => a.id).join()) {
+    fail(`/adopters/ wallet list doesn't match adopters.json5 (got [${listed}])`);
+  }
+  if (file.walletsAndApps.length === 0 && !html.includes("No shipping integrations listed yet")) {
+    fail("/adopters/ has no adopters and no empty state saying so");
+  }
+  // Two distinct calls to action: integrate (for those who haven't), and get
+  // listed (for those who have) — the latter pointing at the file, which
+  // documents its own fields in comments.
+  for (const id of ["become", "get-listed"]) {
+    if (!html.includes(`id="${id}"`)) fail(`/adopters/ is missing the "${id}" section`);
+  }
+  if (!html.includes("adopters.json5")) fail("/adopters/ doesn't name the file to open a PR against");
+  ok(`/adopters/ lists ${file.workers.length} networks and ${file.walletsAndApps.length} wallets/apps`);
 }
 
 // anvil
@@ -189,16 +252,67 @@ if ((await page.inputValue("#watch")) !== "0x00000000219ab540356cBB839Cbe05303d7
 }
 ok("watch address prefilled with the default");
 
-// The demo's preset picker is driven by the same known-workers.json as the
+// The demo's preset picker is driven by the same adopters.json5 as the
 // wallet guide: every entry, plus the demo-only "custom" option.
 {
-  const known = JSON.parse(await readFile(`${IMPL}../known-workers.json`, "utf8")).workers;
+  const known = JSON5.parse(await readFile(`${IMPL}../adopters.json5`, "utf8")).workers;
   const options = await page.$$eval("#preset option", (os) => os.map((o) => o.value));
   const want = [...known.map((w) => w.id), "custom"];
   if (options.join(",") !== want.join(",")) {
-    fail(`demo presets don't match known-workers.json (got ${options}, want ${want})`);
+    fail(`demo presets don't match adopters.json5 (got ${options}, want ${want})`);
   }
   ok(`demo preset picker lists the known workers (${options.join(", ")})`);
+
+  // Every /adopters/ entry links here as `?worker=<id>`; the link is only worth
+  // publishing if it actually arrives on that worker. Run in a throwaway
+  // context so the preset it persists can't leak into the boot test below, and
+  // aim at a worker that is not the default, so selection is provable.
+  const target = known[known.length - 1];
+  const ctx = await browser.newContext();
+  const linked = await ctx.newPage();
+  await linked.route("**/*", (route) => {
+    const host = new URL(route.request().url()).hostname;
+    return host === "127.0.0.1" || host === "localhost" ? route.continue() : route.abort();
+  });
+  await linked.goto(`${siteUrl}/demo/?worker=${target.id}`);
+  const got = {
+    preset: await linked.inputValue("#preset"),
+    specifier: await linked.inputValue("#specifier"),
+  };
+  if (got.preset !== target.id || got.specifier !== target.specifier) {
+    fail(`?worker=${target.id} did not select it (got ${JSON.stringify(got)})`);
+  }
+  ok(`/demo/?worker=<id> selects that worker (${target.id})`);
+
+  // The config field is one textarea of arbitrary JSON for every preset: an
+  // entry's example config is its starting value, and anything without one
+  // starts blank — including "custom", and including a switch away from a
+  // worker that had one (a leftover config would be sent to the next worker).
+  for (const id of [...known.map((w) => w.id), "custom"]) {
+    await linked.selectOption("#preset", id);
+    const shown = await linked.inputValue("#config");
+    const example = known.find((w) => w.id === id)?.exampleConfig;
+    // Compared parsed, not as text: the box is free to format the JSON however
+    // reads best, so long as it is that entry's config and nothing else.
+    if (example === undefined) {
+      if (shown !== "") fail(`demo config box for ${id} should be blank, got ${JSON.stringify(shown)}`);
+    } else if (JSON.stringify(JSON.parse(shown)) !== JSON.stringify(example)) {
+      fail(`demo config box for ${id} doesn't hold its example config (got ${JSON.stringify(shown)})`);
+    }
+  }
+  // Unparseable JSON must be refused before a worker is ever constructed,
+  // rather than surfacing later as an opaque startup failure.
+  await linked.fill("#config", "{ not json");
+  await linked.fill("#specifier", target.specifier);
+  await linked.fill("#bootstrap", rpc);
+  await linked.fill("#worker-rpc", rpc);
+  await linked.click("#toggle");
+  const detail = await linked.textContent("#detail");
+  if (!/config must be valid JSON/.test(detail ?? "")) {
+    fail(`invalid config JSON was not reported (status: ${detail})`);
+  }
+  await ctx.close();
+  ok("demo config box holds each preset's example JSON, and rejects invalid JSON");
 }
 
 await page.fill("#bootstrap", rpc);

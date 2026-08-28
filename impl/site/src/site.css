@@ -304,6 +304,8 @@ code {
 
 /* Tool / link cards */
 .tools { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+/* An odd card out would sit alone in half a row; let it take the whole one. */
+.tools .wide { grid-column: 1 / -1; }
 .tool-card { display: block; transition: transform 0.2s var(--ease), border-color 0.2s; }
 .tool-card:hover { transform: translateY(-3px); border-color: var(--violet-deep); }
 .tool-card h3 { color: var(--text); margin-bottom: 6px; }
@@ -426,6 +428,74 @@ code {
   letter-spacing: 0.06em;
 }
 .prose hr { border: none; border-top: 1px solid var(--border); margin: 2.2em 0; }
+
+/* ---- Adopters directory -------------------------------------------------- */
+/* A registry page, not a trophy case: entries are laid out to be read and
+   copied from (the specifier address is the payload), so the cards are wide,
+   left-aligned and not clickable as a whole. */
+.adopters-page { padding-top: 118px; }
+.page-head { max-width: 760px; margin: 0 auto 10px; text-align: center; }
+.page-head h1 { font-size: clamp(2.1rem, 5.5vw, 3.2rem); font-weight: 800; margin: 8px 0 18px; }
+.page-head .lead { font-size: 1.05rem; color: var(--text-dim); }
+
+.entries { display: grid; gap: 16px; }
+
+.entry { padding: 24px 26px; }
+.entry-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+.entry-head h3 { font-size: 1.25rem; margin: 0; }
+.entry-head h3 a { color: var(--text); }
+.entry-head h3 a:hover { color: var(--violet-bright); }
+.entry-tagline { color: var(--text); font-weight: 500; margin-bottom: 10px; }
+.entry p { font-size: 0.95rem; }
+.entry > p:last-of-type { margin-bottom: 0; }
+.entry-warn { color: var(--warn); font-size: 0.9rem; }
+
+.tag {
+  flex: none;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 3px 9px;
+  border-radius: 999px;
+  color: var(--violet-bright);
+  background: rgba(157, 123, 255, 0.12);
+  border: 1px solid var(--violet-deep);
+}
+/* Reads as a caveat, not a badge: a reference worker gives you no privacy. */
+.tag-muted { color: var(--text-muted); background: var(--surface); border-color: var(--border-strong); }
+
+.entry-meta { margin: 16px 0 0; display: grid; gap: 10px; }
+.entry-row { display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap; }
+.entry-row dt {
+  flex: none;
+  min-width: 108px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.entry-row dd { margin: 0; min-width: 0; flex: 1; }
+.addr { font-size: 0.86rem; overflow-wrap: anywhere; }
+.entry-config {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  background: #08060d;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  overflow-x: auto;
+  color: var(--text-dim);
+}
+.entry-links { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+
+.empty { padding: 28px 26px; border-style: dashed; }
+.empty p:last-child { margin-bottom: 0; }
+
+/* "Get listed" ends on the one action it asks for: edit the file. */
+.listing-foot { text-align: center; margin: 0; }
 
 /* ---- Footer ------------------------------------------------------------- */
 .footer { border-top: 1px solid var(--border); margin-top: 70px; padding: 34px 0; color: var(--text-muted); font-size: 0.9rem; }

@@ -4,11 +4,11 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>html{background:#0c0a12;color:#ece9f6}</style>
-  <title>anon-rpc for wallets &amp; apps</title>
+  <title>anon-rpc adopters — networks, wallets &amp; apps</title>
   <link rel="icon" href="../favicon.svg" type="image/svg+xml" />
   <meta
     name="description"
-    content="Integrate anon-rpc in a wallet or application: one class, one package, an anonymized fetch."
+    content="The anonymizing networks that publish an anon-rpc worker, and the wallets and applications that run one. Every entry lists its mainnet specifier address."
   />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -18,10 +18,18 @@
 <body>
   <!--NAV-->
 
-  <main class="prose">
-    <article>
-<!--DOC_HTML-->
-    </article>
+  <main class="wrap adopters-page">
+    <section class="page-head">
+      <div class="eyebrow">Adopters</div>
+      <h1>Who's adopting <span class="gradient-text">anon-rpc</span></h1>
+      <p class="lead">
+        anon-rpc has two sides. An <strong>anonymizing network</strong> publishes its client as a
+        hash-pinned worker and points a specifier contract at it. A <strong>wallet or app</strong>
+        passes that specifier address to a harness and gets back an anonymized <code>fetch</code>.
+      </p>
+    </section>
+
+<!--ADOPTERS_HTML-->
   </main>
 
   <footer class="footer">
@@ -30,7 +38,7 @@
       <span class="spacer"></span>
       <a href="../">Home</a>
       <a href="https://github.com/ethereum/anon-rpc" target="_blank" rel="noopener">GitHub</a>
-      <a href="https://github.com/ethereum/anon-rpc/blob/main/SPEC.md" target="_blank" rel="noopener">SPEC.md</a>
+      <a href="../spec/">Spec</a>
     </div>
   </footer>
 </body>

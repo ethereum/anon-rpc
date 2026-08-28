@@ -68,7 +68,7 @@ The address above is the passthrough worker, which fulfils calls with an
 ordinary `fetch` — it exercises the sandbox and hash pinning without
 anonymizing anything. Every deployment we know of, and the config each one
 expects, is listed in
-[known-workers.json](https://github.com/ethereum/anon-rpc/blob/main/known-workers.json);
+[adopters.json5](https://github.com/ethereum/anon-rpc/blob/main/adopters.json5);
 the [live demo](https://ethereum.github.io/anon-rpc/demo/) runs any of
 them.
 
@@ -153,11 +153,19 @@ The [live demo](https://ethereum.github.io/anon-rpc/demo/) is this
 exact integration: paste a bootstrap RPC URL and a specifier address, and
 watch an ETH balance stream through the sandboxed worker.
 
+Shipped it? Add yourself to
+[`adopters.json5`](https://github.com/ethereum/anon-rpc/blob/main/adopters.json5)
+(open a PR) and you'll appear on the
+[adopters page](https://ethereum.github.io/anon-rpc/adopters/), alongside the
+networks you can reach.
+
 ## Reference
 
 - [Specification](https://ethereum.github.io/anon-rpc/spec/) —
   normative behavior for everything above (§5 host API, §6 isolation, §12
   errors).
+- [Adopters](https://ethereum.github.io/anon-rpc/adopters/) — the anonymizing
+  networks live on mainnet today, with the specifier address for each.
 - [`@anon-rpc/browser-harness`](https://www.npmjs.com/package/@anon-rpc/browser-harness)
   — the harness package (README documents the full `WorkerInit`).
 - Networks: see [the network integration guide](integrate-network.md) for the

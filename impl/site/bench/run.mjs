@@ -39,13 +39,15 @@
 //   BENCH_RPC_URL=<url> node bench/run.mjs [--n 50] [--rpc URL] [--out results.json]
 //                      [--summary-md summary.md]
 
+import { readFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
+import JSON5 from "json5";
 import { chromium } from "playwright";
 import { createServer } from "vite";
 
-const require = createRequire(import.meta.url);
-const KNOWN_WORKERS = require("../../../known-workers.json").workers;
+const KNOWN_WORKERS = JSON5.parse(
+  readFileSync(new URL("../../../adopters.json5", import.meta.url), "utf8"),
+).workers;
 
 // The beacon deposit contract, as the demo watches: a large balance that
 // changes constantly, so nothing can be served from a trivially warm cache.
@@ -72,7 +74,7 @@ const SUMMARY_MD = arg("summary-md", null);
 // without touching this file. `direct` is the control: no harness at all.
 const ARMS = [
   { id: "direct" },
-  ...KNOWN_WORKERS.map((w) => ({ id: w.id, specifier: w.specifier, config: w.config })),
+  ...KNOWN_WORKERS.map((w) => ({ id: w.id, specifier: w.specifier, config: w.exampleConfig })),
 ];
 
 const t0 = performance.now();

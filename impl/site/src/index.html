@@ -16,28 +16,7 @@
   <link rel="stylesheet" href="site.css" />
 </head>
 <body>
-  <header class="nav">
-    <div class="nav-inner">
-      <a class="brand" href="./">
-        <svg class="brand-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true">
-          <path d="M16 3.5l10 4.2v7.1c0 6.6-4.3 10.6-10 13.2-5.7-2.6-10-6.6-10-13.2V7.7l10-4.2z" stroke="url(#ag)" stroke-width="2" stroke-linejoin="round"/>
-          <circle cx="16" cy="14.5" r="3" fill="url(#ag)"/>
-          <path d="M16 17.5v5" stroke="url(#ag)" stroke-width="2.2" stroke-linecap="round"/>
-          <defs><linearGradient id="ag" x1="2" y1="2" x2="30" y2="30" gradientUnits="userSpaceOnUse"><stop stop-color="#b79dff"/><stop offset="1" stop-color="#ff79c6"/></linearGradient></defs>
-        </svg>
-        <span class="brand-name">anon-rpc</span>
-      </a>
-      <nav class="nav-links">
-        <a href="#integrate">Guides</a>
-        <a href="#how">How it works</a>
-        <a href="spec/">Spec</a>
-        <a class="gh" href="https://github.com/ethereum/anon-rpc" target="_blank" rel="noopener" aria-label="View source on GitHub" title="View source on GitHub">
-          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.92.58.1.79-.25.79-.56 0-.28-.01-1.02-.02-2-3.2.69-3.88-1.54-3.88-1.54-.52-1.33-1.28-1.68-1.28-1.68-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.71 1.26 3.37.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.18 1.18.92-.26 1.91-.39 2.89-.39.98 0 1.97.13 2.89.39 2.21-1.49 3.18-1.18 3.18-1.18.63 1.58.23 2.75.11 3.04.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.4-5.25 5.68.41.35.78 1.05.78 2.12 0 1.53-.01 2.76-.01 3.14 0 .31.21.67.8.56C20.71 21.39 24 17.08 24 12c0-6.35-5.15-11.5-11.5-11.5z"/></svg>
-        </a>
-        <a class="btn sm nav-cta" href="demo/">Live demo →</a>
-      </nav>
-    </div>
-  </header>
+  <!--NAV-->
 
   <!-- Hero -->
   <section class="hero">
@@ -142,9 +121,13 @@
     <section class="section wrap" id="resources">
       <div class="section-head">
         <div class="eyebrow">Resources</div>
-        <h2>Spec, harness, demo</h2>
+        <h2>Adopters, spec, harness</h2>
       </div>
       <div class="tools">
+        <a class="card tool-card" href="adopters/">
+          <h3>Adopters <span class="arrow">→</span></h3>
+          <p>The anonymizing networks live on mainnet today, with the specifier address for each — and the wallets and apps running them.</p>
+        </a>
         <a class="card tool-card" href="demo/">
           <h3>Live demo <span class="arrow">→</span></h3>
           <p>Watch an ETH balance through a hash-verified worker running in the sandbox, resolved from the mainnet specifier.</p>
@@ -157,7 +140,7 @@
           <h3><code>@anon-rpc/browser-harness</code> <span class="arrow">→</span></h3>
           <p>The reference browser harness on npm — specifier resolution, hash verification, sandboxing, and the capability bridge.</p>
         </a>
-        <a class="card tool-card" href="https://github.com/ethereum/anon-rpc" target="_blank" rel="noopener">
+        <a class="card tool-card wide" href="https://github.com/ethereum/anon-rpc" target="_blank" rel="noopener">
           <h3>GitHub <span class="arrow">→</span></h3>
           <p>Spec, reference implementation, worker template, and the on-chain publishing tooling.</p>
         </a>
@@ -178,6 +161,7 @@
       <span>anon-rpc — MIT © Ethereum Foundation</span>
       <span class="spacer"></span>
       <a href="https://github.com/ethereum/anon-rpc" target="_blank" rel="noopener">GitHub</a>
+      <a href="adopters/">Adopters</a>
       <a href="spec/">Spec</a>
       <a href="https://www.npmjs.com/package/@anon-rpc/browser-harness" target="_blank" rel="noopener">npm</a>
     </div>

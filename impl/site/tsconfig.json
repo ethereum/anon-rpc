@@ -9,8 +9,8 @@
     "noUnusedParameters": true,
     "skipLibCheck": true,
     "verbatimModuleSyntax": true,
-    // The demo reads the repo's known-workers.json directly (see src/demo/main.ts).
-    "resolveJsonModule": true,
+    // The demo reads the repo's adopters.json5 directly (see src/demo/main.ts);
+    // TypeScript can't parse JSON5, so its shape comes from src/json5.d.ts.
     "isolatedModules": true,
     "noEmit": true,
     "types": [],

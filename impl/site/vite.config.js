@@ -10,9 +10,28 @@
 import { defineConfig } from "vite";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import JSON5 from "json5";
 import { Marked } from "marked";
 import markedShiki from "marked-shiki";
 import { createHighlighter } from "shiki";
+
+/**
+ * `import data from "…/adopters.json5"`. Vite handles .json natively but treats
+ * an unknown extension as a static asset, so this must run before the asset
+ * plugin ("pre") and hand back a module instead of a URL.
+ */
+function json5Modules() {
+  return {
+    name: "json5",
+    enforce: "pre",
+    load(id) {
+      const file = id.split("?")[0];
+      if (!file.endsWith(".json5")) return;
+      const data = JSON5.parse(readFileSync(file, "utf8"));
+      return `export default ${JSON.stringify(data)};`;
+    },
+  };
+}
 
 // Markdown pages host the repo's docs, rendered at build time (and live in
 // `vite dev`) into the <!--DOC_HTML--> slot of each page shell. Code fences
@@ -26,10 +45,15 @@ const DOC_PAGES = {
 };
 
 // Known worker deployments, shared with the demo (src/demo/main.ts) so the two
-// never disagree about an address or the config a worker expects.
-const KNOWN_WORKERS = JSON.parse(
-  readFileSync(resolve(import.meta.dirname, "../../known-workers.json"), "utf8"),
-).workers;
+// never disagree about an address or the config a worker expects. The file
+// documents its own fields in comments — hence JSON5.
+const ADOPTERS_FILE = JSON5.parse(
+  readFileSync(resolve(import.meta.dirname, "../../adopters.json5"), "utf8"),
+);
+const KNOWN_WORKERS = ADOPTERS_FILE.workers;
+// The other half of that file: wallets and apps that ship anon-rpc. Empty until
+// the first one does, which the /adopters/ page says in as many words.
+const WALLETS_AND_APPS = ADOPTERS_FILE.walletsAndApps ?? [];
 
 /** A config object as it would be written in the sample: JS literal, 2-space. */
 function configLiteral(config) {
@@ -57,10 +81,12 @@ function renderWorkerPicker(templateMd) {
   const fence = templateMd.match(/```ts\n([\s\S]*?)```/);
   if (!fence) throw new Error("WORKER_PICKER region has no ```ts code sample");
   const template = fence[1];
-  for (const anchor of [`"${base.specifier}"`, `config: ${configLiteral(base.config)},`]) {
+  // `config:` here is the harness's own WorkerInit field (§7.1) — the API name
+  // stays put; only the value substituted into it comes from exampleConfig.
+  for (const anchor of [`"${base.specifier}"`, `config: ${configLiteral(base.exampleConfig)},`]) {
     if (!template.includes(anchor)) {
       throw new Error(
-        `WORKER_PICKER sample no longer matches known-workers.json entry "${base.id}": ` +
+        `WORKER_PICKER sample no longer matches adopters.json5 entry "${base.id}": ` +
           `expected to find ${JSON.stringify(anchor)}. Update the sample or the JSON.`,
       );
     }
@@ -78,10 +104,13 @@ function renderWorkerPicker(templateMd) {
   const panels = KNOWN_WORKERS.map((w, i) => {
     const code = template
       .replace(`"${base.specifier}"`, `"${w.specifier}"`)
-      .replace(`config: ${configLiteral(base.config)},`, `config: ${configLiteral(w.config)},`);
+      .replace(
+        `config: ${configLiteral(base.exampleConfig)},`,
+        `config: ${configLiteral(w.exampleConfig)},`,
+      );
     const notes = [
       w.note && `<p class="picker-note">${esc(w.note)}</p>`,
-      w.configNote && `<p class="picker-note warn">${esc(w.configNote)}</p>`,
+      w.exampleConfigNote && `<p class="picker-note warn">${esc(w.exampleConfigNote)}</p>`,
     ]
       .filter(Boolean)
       .join("");
@@ -170,6 +199,240 @@ async function renderDocMarkdown(slug) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Shared chrome. Every page shell carries a <!--NAV--> slot rather than its own
+// copy of the header: six hand-maintained copies had already drifted (three
+// pages linked "Spec" at themselves), and a seventh page would drift again.
+// Paths are relative, so the only per-page variable is the depth prefix.
+// ---------------------------------------------------------------------------
+
+// The site's page shells: every one carries the shared header, and every one is
+// a build input. src/bench/ is deliberately absent from both — it is a dev-only
+// harness page (see bench/run.mjs), never built and never navigable.
+const PAGES = ["index", "demo", "spec", "wallets", "networks", "adopters"];
+
+// Real pages, in nav order. The two guides are named "… guide" rather than
+// "Wallets"/"Networks" because /adopters/ has sections by those names that mean
+// the parties, not the documents.
+const NAV_ITEMS = [
+  { slug: "wallets", label: "Wallet guide" },
+  { slug: "networks", label: "Network guide" },
+  { slug: "adopters", label: "Adopters" },
+  { slug: "spec", label: "Spec" },
+];
+
+const BRAND_MARK = `<svg class="brand-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+          <path d="M16 3.5l10 4.2v7.1c0 6.6-4.3 10.6-10 13.2-5.7-2.6-10-6.6-10-13.2V7.7l10-4.2z" stroke="url(#ag)" stroke-width="2" stroke-linejoin="round"/>
+          <circle cx="16" cy="14.5" r="3" fill="url(#ag)"/>
+          <path d="M16 17.5v5" stroke="url(#ag)" stroke-width="2.2" stroke-linecap="round"/>
+          <defs><linearGradient id="ag" x1="2" y1="2" x2="30" y2="30" gradientUnits="userSpaceOnUse"><stop stop-color="#b79dff"/><stop offset="1" stop-color="#ff79c6"/></linearGradient></defs>
+        </svg>`;
+
+const GH_MARK = `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.92.58.1.79-.25.79-.56 0-.28-.01-1.02-.02-2-3.2.69-3.88-1.54-3.88-1.54-.52-1.33-1.28-1.68-1.28-1.68-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.71 1.26 3.37.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.18 1.18.92-.26 1.91-.39 2.89-.39.98 0 1.97.13 2.89.39 2.21-1.49 3.18-1.18 3.18-1.18.63 1.58.23 2.75.11 3.04.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.4-5.25 5.68.41.35.78 1.05.78 2.12 0 1.53-.01 2.76-.01 3.14 0 .31.21.67.8.56C20.71 21.39 24 17.08 24 12c0-6.35-5.15-11.5-11.5-11.5z"/></svg>`;
+
+/** The site header, identical on every page but for which link is current. */
+function renderNav(active) {
+  // "index" is the only page at the site root; everything else is one deep.
+  const p = active === "index" ? "" : "../";
+  const current = (slug) => (slug === active ? ' aria-current="page"' : "");
+  const links = NAV_ITEMS.map(
+    ({ slug, label }) => `<a href="${p}${slug}/"${current(slug)}>${label}</a>`,
+  ).join("\n        ");
+  return `<header class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="${p || "./"}">
+        ${BRAND_MARK}
+        <span class="brand-name">anon-rpc</span>
+      </a>
+      <nav class="nav-links">
+        ${links}
+        <a class="gh" href="https://github.com/ethereum/anon-rpc" target="_blank" rel="noopener" aria-label="View source on GitHub" title="View source on GitHub">
+          ${GH_MARK}
+        </a>
+        <a class="btn sm nav-cta" href="${p}demo/"${current("demo")}>Live demo →</a>
+      </nav>
+    </div>
+  </header>`;
+}
+
+// ---------------------------------------------------------------------------
+// The adopters page (/adopters/): the same adopters.json5, rendered as a
+// directory rather than a code sample. Static HTML built here — the page has no
+// runtime JavaScript, so it is as fast and as scrapeable as the list is short.
+// ---------------------------------------------------------------------------
+
+const ETHERSCAN = "https://etherscan.io/address/";
+
+// "tor-js — fetch over Tor" carries two things the card wants apart: the name a
+// worker calls itself, and its one-line tagline. The dropdown label is the only
+// place both are written, so it stays the single source and is split here.
+function splitLabel(label) {
+  const [name, ...rest] = label.split(/\s+—\s+/);
+  return { name, tagline: rest.join(" — ") };
+}
+
+function workerCard(w) {
+  const { name, tagline } = splitLabel(w.label);
+  // A worker that does not anonymize must say so at a glance, not only in the
+  // paragraph underneath it: this page is read by people shopping for one.
+  const reference = w.kind === "reference";
+  const tag = reference
+    ? `<span class="tag tag-muted">Reference worker</span>`
+    : `<span class="tag">Anonymizing network</span>`;
+  const heading = w.url
+    ? `<a href="${esc(w.url)}" target="_blank" rel="noopener">${esc(name)}</a>`
+    : esc(name);
+  // Labelled "Example config" rather than "Config": §7.1 config is opaque to
+  // the harness and defined by the network, so what is listed here is one set
+  // of values known to work, not the shape a wallet is obliged to send.
+  const config = w.exampleConfig
+    ? `<div class="entry-row"><dt>Example config</dt><dd><pre class="entry-config">${esc(
+        JSON.stringify(w.exampleConfig, null, 2),
+      )}</pre></dd></div>`
+    : "";
+  const configNote = w.exampleConfigNote
+    ? `<p class="entry-warn">${esc(w.exampleConfigNote)}</p>`
+    : "";
+  return `<article class="card entry" id="worker-${esc(w.id)}">
+  <div class="entry-head"><h3>${heading}</h3>${tag}</div>
+  ${tagline ? `<p class="entry-tagline">${esc(tagline)}</p>` : ""}
+  <p>${esc(w.note ?? "")}</p>
+  ${configNote}
+  <dl class="entry-meta">
+    <div class="entry-row"><dt>Specifier</dt><dd><a class="mono addr" href="${ETHERSCAN}${esc(
+      w.specifier,
+    )}#readContract" target="_blank" rel="noopener">${esc(w.specifier)}</a></dd></div>
+    ${config}
+  </dl>
+  <div class="entry-links">
+    <a class="ghost" href="../demo/?worker=${esc(w.id)}">Try it in the demo →</a>
+    <a class="ghost" href="../wallets/">Use it in code →</a>
+  </div>
+</article>`;
+}
+
+function adopterCard(a) {
+  const ships = (a.workers ?? [])
+    .map((id) => KNOWN_WORKERS.find((w) => w.id === id))
+    .filter(Boolean)
+    .map((w) => `<a href="#worker-${esc(w.id)}">${esc(splitLabel(w.label).name)}</a>`)
+    .join(", ");
+  const heading = a.url
+    ? `<a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.label)}</a>`
+    : esc(a.label);
+  return `<article class="card entry" id="adopter-${esc(a.id)}">
+  <div class="entry-head"><h3>${heading}</h3><span class="tag tag-muted">${esc(
+    a.kind === "app" ? "Application" : "Wallet",
+  )}</span></div>
+  <p>${esc(a.note ?? "")}</p>
+  ${ships ? `<dl class="entry-meta"><div class="entry-row"><dt>Ships</dt><dd>${ships}</dd></div></dl>` : ""}
+</article>`;
+}
+
+function renderAdopters() {
+  const workers = KNOWN_WORKERS.map(workerCard).join("\n");
+  const walletsAndApps = WALLETS_AND_APPS;
+  // An empty list is stated plainly rather than dressed up: anon-rpc is a
+  // proposed standard, and pretending otherwise would be the wrong first
+  // impression for the people this page is asking to be the first entry.
+  const adopterBody = walletsAndApps.length
+    ? `<div class="entries">${walletsAndApps.map(adopterCard).join("\n")}</div>`
+    : `<div class="card empty">
+  <p><strong>No shipping integrations listed yet.</strong> anon-rpc is a proposed standard, and
+  the first wallet or application to ship it belongs here.</p>
+  <p>If you are building one, the integration is one class and one package —
+  <a href="../wallets/">read the guide</a>, then add yourself below.</p>
+</div>`;
+  return `<section class="section" id="networks">
+  <div class="section-head">
+    <div class="eyebrow">Publishing a worker</div>
+    <h2>Anonymizing networks</h2>
+    <p>Each entry is live on Ethereum mainnet. The specifier address is everything a wallet needs —
+    paste it into a harness and the pinned client code is fetched, hash-verified and sandboxed for you.</p>
+  </div>
+  <div class="entries">
+${workers}
+  </div>
+</section>
+
+<section class="section" id="hosts">
+  <div class="section-head">
+    <div class="eyebrow">Running a worker</div>
+    <h2>Wallets &amp; applications</h2>
+    <p>The hosts (§2) that consume an anonymized <code>fetch</code> in production.</p>
+  </div>
+  ${adopterBody}
+</section>
+
+<section class="section" id="become">
+  <div class="section-head">
+    <div class="eyebrow">Haven't integrated yet</div>
+    <h2>Become an adopter</h2>
+  </div>
+  <div class="tools">
+    <a class="card tool-card" href="../networks/">
+      <h3>I run an anonymizing network <span class="arrow">→</span></h3>
+      <p>Ship your client as a hash-pinned worker and point a specifier contract at it: the
+      capability API, the bundle, and hosting the bytes. Every wallet using anon-rpc can then
+      reach you by address alone.</p>
+    </a>
+    <a class="card tool-card" href="../wallets/">
+      <h3>I build a wallet or app <span class="arrow">→</span></h3>
+      <p>Construct a worker from a specifier address and get back an anonymized <code>fetch</code>.
+      One class, one package — and switching networks later is a change of address.</p>
+    </a>
+  </div>
+</section>
+
+<section class="section" id="get-listed">
+  <div class="section-head">
+    <div class="eyebrow">Already integrated</div>
+    <h2>Get listed on this page</h2>
+  </div>
+  <p class="listing-foot">
+    <a class="btn secondary" href="https://github.com/ethereum/anon-rpc/edit/main/adopters.json5" target="_blank" rel="noopener">Edit adopters.json5 on GitHub →</a>
+  </p>
+</section>`;
+}
+
+/** Which page a shell belongs to, from its path: src/foo/index.html → "foo". */
+function slugOf(filename) {
+  const m = filename.replace(/\\/g, "/").match(/([^/]+)\/index\.html$/);
+  return m && m[1] !== "src" ? m[1] : "index";
+}
+
+function sharedNav() {
+  return {
+    name: "inject-nav",
+    transformIndexHtml: {
+      order: "pre",
+      handler(html, ctx) {
+        const slug = slugOf(ctx.filename);
+        // Pages outside the site proper (the dev-only bench harness) get no
+        // chrome; a page shell that IS one and lost its slot is a build error.
+        if (!PAGES.includes(slug)) return;
+        if (!html.includes("<!--NAV-->")) {
+          throw new Error(`${ctx.filename} has no <!--NAV--> slot for the shared header`);
+        }
+        return html.replace("<!--NAV-->", () => renderNav(slug));
+      },
+    },
+  };
+}
+
+function adoptersPage() {
+  return {
+    name: "inject-adopters",
+    transformIndexHtml: {
+      order: "pre",
+      handler(html, ctx) {
+        if (!/adopters[\\/]index\.html$/.test(ctx.filename)) return;
+        return html.replace("<!--ADOPTERS_HTML-->", () => renderAdopters());
+      },
+    },
+  };
+}
+
 function docPages() {
   return {
     name: "inject-doc-markdown",
@@ -193,19 +456,20 @@ function docPages() {
 export default defineConfig({
   root: "src",
   base: "./", // relative URLs: works at any Pages mount path
-  plugins: [docPages()],
+  plugins: [json5Modules(), sharedNav(), docPages(), adoptersPage()],
   build: {
     outDir: "../dist",
     emptyOutDir: true,
     sourcemap: true,
     rollupOptions: {
-      input: {
-        index: resolve(import.meta.dirname, "src/index.html"),
-        demo: resolve(import.meta.dirname, "src/demo/index.html"),
-        spec: resolve(import.meta.dirname, "src/spec/index.html"),
-        wallets: resolve(import.meta.dirname, "src/wallets/index.html"),
-        networks: resolve(import.meta.dirname, "src/networks/index.html"),
-      },
+      // Same list as the nav, so a new page cannot be built without chrome or
+      // given chrome without being built.
+      input: Object.fromEntries(
+        PAGES.map((slug) => [
+          slug,
+          resolve(import.meta.dirname, slug === "index" ? "src/index.html" : `src/${slug}/index.html`),
+        ]),
+      ),
     },
   },
 });
