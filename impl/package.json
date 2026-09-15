@@ -6,6 +6,7 @@
   "description": "anon-rpc reference prototype: harness + passthrough worker (see ../SPEC.md).",
   "workspaces": [
     "browser-harness",
+    "node-harness",
     "passthrough-worker",
     "test-worker",
     "specifier",
