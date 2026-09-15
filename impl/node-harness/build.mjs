@@ -28,6 +28,11 @@ const common = {
   format: "esm",
   sourcemap: true,
   logLevel: "info",
+  // prelude.guest.js is SOURCE TEXT for the QuickJS isolate, not a module of
+  // this program: it is handed to the interpreter as a string. The text loader
+  // is what stops esbuild from parsing, bundling or transpiling it — the
+  // isolate's own parser is the only one that should ever see it.
+  loader: { ".guest.js": "text" },
 };
 
 // npm dependencies stay external in the host build so consumers dedupe them.
