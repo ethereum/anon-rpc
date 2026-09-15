@@ -283,6 +283,37 @@ inherited descriptor, and a bridged socket is *received* on that channel rather
 than created — which the e2e confirms by still passing fd-handoff tests with
 creation denied.
 
+### Syscalls the worker has no business making
+
+The socket rules above are posture-dependent; the rest of the filter is always
+installed, in both postures. It denies 23 calls, in four groups: reading or
+steering another process (`ptrace`, `process_vm_readv`/`writev`, `pidfd_open`,
+`pidfd_getfd`, `pidfd_send_signal`), `io_uring` (an alternate submission path
+for file and network work, blocked by Docker's and Chrome's sandboxes as an
+escape class), facilities a typical host gates by sysctl (`perf_event_open`,
+`bpf`, `userfaultfd`, the keyring calls), and rearranging the system the
+Landlock ruleset was written against (`unshare`, `setns`, `mount`, `umount2`,
+`pivot_root`, the file-handle calls, `memfd_create`).
+
+Signals are the one conditional rule: `kill` and `tgkill` are allowed **to self
+only**, compared against a pid baked into the filter — `execve` does not change
+it, so the launcher and the node it becomes are one process. Self-signalling has
+to work, because glibc's `abort()` raises `SIGABRT` via `tgkill` and node uses
+`abort()` for fatal errors; denying it would turn a clean crash into a hang.
+
+Why this group exists at all, measured: before it, a probe run **inside** the
+sandbox reached exactly what the same probe reached **outside** it. Everything
+that appeared to be denied was denied by yama's `ptrace_scope=1`,
+`perf_event_paranoid=4` and `unprivileged_userfaultfd=0` — the distro's
+choices, not ours, and any of them may be set differently on a deployment host.
+The errno is the tell: those refusals were `EPERM`, and ours are `EACCES`.
+
+This layer earns its keep precisely when the others have failed. Worker code
+cannot reach raw syscalls today — the vm escape yields `process`, but
+`--permission` closes `process.binding` and there is no FFI — so syscall
+filtering is defence against **post-exploitation**, after a V8 or JIT bug, which
+is exactly the moment every JS-level check including `--permission` is worthless.
+
 Untested: the **ABI ≥ 5 paths**. This kernel reports 4, so the higher presets
 are selected by code that has never run, and each raises the filesystem rights
 handled too (truncate at 3, ioctl_dev at 5), which could deny something node
@@ -330,11 +361,22 @@ on both harnesses and a worker gets a documented code instead of a
   belt is inert here. On 25+, with `--allow-net` absent, whether operations on a
   *passed-in* descriptor are denied is untested — the permission model gates the
   `net` binding, not the fd. If it denies them, the seat belt fights the design.
-- **More seccomp.** The filter today denies exactly one thing (IP datagram
-  sockets). Landlock does not filter syscalls such as `ptrace`, and a
-  general-purpose allow-list would be the next hardening — bearing in mind
-  that an over-tight filter breaks node in ways that surface as mysterious
-  startup crashes.
+- **Inverting the syscall filter.** The filesystem and the network are both
+  expressed as allow-lists — deny everything, grant a measured minimum. The
+  syscall filter is the one axis still expressed as a **deny-list**, which is
+  why it looks inconsistent: it is.
+
+  A seccomp allow-list is the normal answer (Chrome, OpenSSH, systemd's
+  `SystemCallFilter=@system-service`), and this repo already has the method —
+  the filesystem grant set was derived by a ladder that measured what node
+  needs, and seccomp's `SECCOMP_RET_LOG` supports the same learning mode.
+
+  The reason not to do it naively: a derived-minimal list is brittle. Syscalls
+  used only on error paths, under memory pressure, during TLS renegotiation, or
+  by a *different* worker's workload will not appear in a test run and will then
+  fail in production as a baffling `EACCES`. That is why Docker ships ~350
+  allowed syscalls rather than a tight derived set. Start from a curated base
+  minus the dangerous groups, not from zero.
 - **Packaging.** Per-platform `optionalDependencies` (`@anon-rpc/launch-linux-x64`
   and friends) so no postinstall script or install-time network is needed, plus
   hash-pinning the launcher itself — a project premised on verifying delivered

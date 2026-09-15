@@ -178,17 +178,17 @@ func main() {
 		fatal(fmt.Errorf("prctl(PR_SET_NO_NEW_PRIVS): %w", err))
 	}
 
-	// Landlock can only deny UDP from ABI 10 (linux 7.2), which almost nothing
-	// runs yet — so on anything older seccomp closes that gap. Applied after
-	// landlock so a failure here cannot leave a half-configured sandbox that
-	// still looks enforced.
-	udpDenied := a.restrictNet && abi >= 10
-	if a.noUDP || a.noUnix {
-		if err := installSeccompFilter(a.noUnix); err != nil {
-			fatal(fmt.Errorf("seccomp: %w", err))
-		}
-		udpDenied = true
+	// The seccomp filter is ALWAYS installed: most of it denies syscalls that
+	// act on the rest of the system (ptrace, io_uring, the keyring,
+	// namespaces) and nothing legitimate needs those in either posture. The
+	// socket rules within it are the conditional part.
+	//
+	// Applied after landlock, so a failure here cannot leave a half-configured
+	// sandbox that still reports as enforced.
+	if err := installSeccompFilter(a.noUDP, a.noUnix); err != nil {
+		fatal(fmt.Errorf("seccomp: %w", err))
 	}
+	udpDenied := a.noUDP || (a.restrictNet && abi >= 10)
 
 	// Read by the harness, which treats anything but this line as a hard error
 	// rather than a log message. The detail after it says what the kernel could
@@ -203,7 +203,9 @@ func main() {
 	} else if udpDenied {
 		net = "udp"
 	}
-	fmt.Fprintf(os.Stderr, "anon-rpc-launch: landlock fully enforced (abi %d, fs, net: %s)\n", abi, net)
+	fmt.Fprintf(os.Stderr,
+		"anon-rpc-launch: landlock fully enforced (abi %d, fs, net: %s, syscalls: %d denied)\n",
+		abi, net, len(deniedCalls))
 
 	bin, err := exec.LookPath(a.cmd[0])
 	if err != nil {

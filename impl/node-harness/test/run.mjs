@@ -373,15 +373,21 @@ ok(`address policy refused a non-allow-listed destination (${sock.denied})`);
   // The launcher asks for the best ABI the kernel offers and says what it got.
   // Asserting the shape catches a regression to a pinned version, which would
   // silently leave UDP open on kernels that can close it (ABI 10+).
-  const posture = (r.stderr ?? "").match(/landlock fully enforced \(abi (\d+), fs, net: (\S+)\)/);
+  const posture = (r.stderr ?? "").match(
+    /landlock fully enforced \(abi (\d+), fs, net: ([^,)]+), syscalls: (\d+) denied\)/,
+  );
   if (!posture) fail(`launcher did not report its enforcement posture: ${r.stderr}`);
-  const [, abi, net] = posture;
+  const [, abi, net, denied] = posture;
+  // The syscall deny-list is the layer that matters after a V8 or JIT bug,
+  // when every JS-level check including --permission is worthless. Asserting
+  // it is non-empty catches a launcher that silently stopped installing it.
+  if (Number(denied) < 20) fail(`only ${denied} syscalls denied; the deny-list looks truncated`);
   if (Number(abi) < 4) fail(`launcher accepted landlock abi ${abi}, below the floor of 4`);
   // seccomp closes the UDP gap that landlock leaves below abi 10, so the
   // posture is the same on every supported kernel.
   const wantNet = "tcp+udp";
   if (net !== wantNet) fail(`abi ${abi} should deny ${wantNet}, reported ${net}`);
-  ok(`landlock denies the child's own TCP connect (EACCES) at abi ${abi}, net: ${net}`);
+  ok(`landlock denies the child's own TCP connect (EACCES) at abi ${abi}, net: ${net}, ${denied} syscalls denied`);
 }
 
 /* --- 6. a worker that escapes the vm context, which it can --------------- */
