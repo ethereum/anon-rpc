@@ -44,7 +44,7 @@ export function workerHostPath(): string {
  * Missing paths are dropped: the launcher fatals on a grant it cannot stat,
  * and hosts differ (no /run/systemd on a non-systemd box, no /lib64 on arm).
  */
-function nodeRuntimeGrants(): { ro: string[]; rw: string[] } {
+function nodeRuntimeGrants(needsResolver: boolean): { ro: string[]; rw: string[] } {
   const ro = [
     dirname(process.execPath), // execve, plus the loader reading the binary
     "/lib",
@@ -56,14 +56,16 @@ function nodeRuntimeGrants(): { ro: string[]; rw: string[] } {
     // C, below the permission model, so only Landlock can let it through and
     // the failure names no sandbox.
     "/etc/ssl",
-    // Resolver inputs. resolv.conf is commonly a symlink into /run, and
-    // Landlock rules follow the target — granting /etc alone leaves DNS
-    // failing with EAI_AGAIN.
-    "/etc/hosts",
-    "/etc/nsswitch.conf",
-    "/etc/gai.conf",
-    "/etc/resolv.conf",
-    realpath("/etc/resolv.conf"),
+    // Resolver inputs — only for a worker doing its own DNS. In the bridged
+    // posture the HOST resolves, and the child has no UDP socket to ask with
+    // anyway, so these are dropped: a sandbox should not carry grants for a
+    // capability the process does not have.
+    //
+    // resolv.conf is commonly a symlink into /run, and Landlock follows the
+    // target, so granting /etc alone would still leave DNS failing EAI_AGAIN.
+    ...(needsResolver
+      ? ["/etc/hosts", "/etc/nsswitch.conf", "/etc/gai.conf", "/etc/resolv.conf", realpath("/etc/resolv.conf")]
+      : []),
   ];
   return { ro: unique(ro.filter(exists)), rw: ["/dev/null"].filter(exists) };
 }
@@ -138,14 +140,18 @@ export function spawnWorkerProcess(
     return { child, confined: Promise.resolve(), stderr: collect(child) };
   }
 
-  const { ro, rw } = nodeRuntimeGrants();
+  const { ro, rw } = nodeRuntimeGrants(opts.ambientNetwork ?? false);
   const args = [
     ...ro.flatMap((p) => ["--ro", p]),
     ...rw.flatMap((p) => ["--rw", p]),
     // No --connect-port rules alongside it: the deny is total, and the worker's
     // network arrives as descriptors the host passes in. Landlock governs
     // opening, not existing fds, so a handed-in socket keeps working.
-    ...(opts.ambientNetwork ? [] : ["--restrict-net"]),
+    //
+    // --no-udp is the seccomp half. Landlock only gained UDP rights at ABI 10
+    // (linux 7.2), so on the kernels anyone actually runs, --restrict-net alone
+    // would leave UDP wide open — including to the host's own loopback.
+    ...(opts.ambientNetwork ? [] : ["--restrict-net", "--no-udp"]),
     // The child reads its own host script. The worker bundle is NOT on disk —
     // it arrives over IPC as the bytes the harness already hash-verified — so
     // no grant is needed for it.

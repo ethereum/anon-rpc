@@ -357,7 +357,7 @@ ok(`address policy refused a non-allow-listed destination (${sock.denied})`);
     LAUNCHER,
     [
       "--ro", dirname(process.execPath), "--ro", "/lib", "--ro", "/usr/lib", "--ro", "/proc",
-      "--rw", "/dev/null", "--ro", "/dev/urandom", "--ro", "/etc/ssl", "--restrict-net",
+      "--rw", "/dev/null", "--ro", "/dev/urandom", "--ro", "/etc/ssl", "--restrict-net", "--no-udp",
       "--", process.execPath, "--permission", "-e",
       `const n=require("node:net");const s=n.connect(${chain.address().port},"127.0.0.1");` +
         `s.on("connect",()=>{console.log("CONNECTED");process.exit(0)});` +
@@ -377,12 +377,11 @@ ok(`address policy refused a non-allow-listed destination (${sock.denied})`);
   if (!posture) fail(`launcher did not report its enforcement posture: ${r.stderr}`);
   const [, abi, net] = posture;
   if (Number(abi) < 4) fail(`launcher accepted landlock abi ${abi}, below the floor of 4`);
-  const wantNet = Number(abi) >= 10 ? "tcp+udp" : "tcp";
+  // seccomp closes the UDP gap that landlock leaves below abi 10, so the
+  // posture is the same on every supported kernel.
+  const wantNet = "tcp+udp";
   if (net !== wantNet) fail(`abi ${abi} should deny ${wantNet}, reported ${net}`);
   ok(`landlock denies the child's own TCP connect (EACCES) at abi ${abi}, net: ${net}`);
-  if (net === "tcp") {
-    ok("  (UDP stays open below abi 10 — 'no ambient network' means no ambient TCP here)");
-  }
 }
 
 console.log("\n✅ node-harness e2e passed");

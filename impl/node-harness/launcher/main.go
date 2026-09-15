@@ -47,6 +47,7 @@ import (
 type args struct {
 	ro, rw       []string
 	restrictNet  bool
+	noUDP        bool
 	connectPorts []uint16
 	bindPorts    []uint16
 	cmd          []string
@@ -54,7 +55,7 @@ type args struct {
 
 func usage(msg string) {
 	fmt.Fprintf(os.Stderr, "anon-rpc-launch: %s\n", msg)
-	fmt.Fprintln(os.Stderr, "usage: anon-rpc-launch [--ro PATH]... [--rw PATH]... [--restrict-net] "+
+	fmt.Fprintln(os.Stderr, "usage: anon-rpc-launch [--ro PATH]... [--rw PATH]... [--restrict-net] [--no-udp] "+
 		"[--connect-port N]... [--bind-port N]... -- CMD [ARGS]...")
 	os.Exit(2)
 }
@@ -83,6 +84,8 @@ func parse(argv []string) args {
 			a.rw = append(a.rw, next("--rw"))
 		case "--restrict-net":
 			a.restrictNet = true
+		case "--no-udp":
+			a.noUDP = true
 		case "--connect-port":
 			a.connectPorts = append(a.connectPorts, port("--connect-port"))
 		case "--bind-port":
@@ -167,20 +170,35 @@ func main() {
 	}
 
 	// No setuid/setgid escalation from here on, for us or anything we exec.
+	// Also a precondition for loading an unprivileged seccomp filter below.
 	if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
 		fatal(fmt.Errorf("prctl(PR_SET_NO_NEW_PRIVS): %w", err))
+	}
+
+	// Landlock can only deny UDP from ABI 10 (linux 7.2), which almost nothing
+	// runs yet — so on anything older seccomp closes that gap. Applied after
+	// landlock so a failure here cannot leave a half-configured sandbox that
+	// still looks enforced.
+	udpDenied := a.restrictNet && abi >= 10
+	if a.noUDP {
+		if err := installDenyUDP(); err != nil {
+			fatal(fmt.Errorf("seccomp: %w", err))
+		}
+		udpDenied = true
 	}
 
 	// Read by the harness, which treats anything but this line as a hard error
 	// rather than a log message. The detail after it says what the kernel could
 	// actually enforce, so "no ambient network" is never reported as stronger
 	// than it is: below ABI 10 it means no ambient TCP.
-	net := "tcp"
-	if abi >= 10 {
-		net = "tcp+udp"
-	}
-	if !a.restrictNet {
-		net = "unrestricted"
+	net := "unrestricted"
+	if a.restrictNet {
+		net = "tcp"
+		if udpDenied {
+			net = "tcp+udp"
+		}
+	} else if udpDenied {
+		net = "udp"
 	}
 	fmt.Fprintf(os.Stderr, "anon-rpc-launch: landlock fully enforced (abi %d, fs, net: %s)\n", abi, net)
 

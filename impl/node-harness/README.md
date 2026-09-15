@@ -212,29 +212,50 @@ new AnonRpcWorker({ address, network: { ambient: true } })                  // b
 new AnonRpcWorker({ address, network: { policy: { allow: ["10.0.0.0/8"] } } }) // bridged (default)
 ```
 
-### What "no ambient network" actually covers
+### What "no ambient network" covers, and which layer does it
 
-Landlock's network rights are TCP-only from **ABI 4 through 9**; **ABI 10** adds
-UDP bind and connect/send. Abstract unix sockets need Landlock scoping (ABI 6+).
+Landlock's network rights are **TCP-only from ABI 4 through 9**; ABI 10 adds UDP
+bind and connect/send, and ABI 10 is **Linux 7.2**. Ubuntu 24.04 LTS ships 6.8
+and its HWE kernel is 7.0, so ABI 10 is out of reach for most deployments for a
+while yet: UDP being open is the *normal* case, not a rare degraded one.
 
-The launcher therefore asks for the **best ABI the kernel supports** rather than
-pinning a version — pinning V4 would leave UDP open even on a kernel that could
-close it — and reports what it got:
+So the two layers split the job:
+
+| | mechanism | why that one |
+|---|---|---|
+| TCP connect/bind | Landlock | address-independent, kernel-enforced, cheap |
+| UDP socket creation | seccomp | Landlock cannot, below ABI 10 |
+| *which* address | host-side policy | neither can: seccomp cannot dereference the `sockaddr` pointer `connect()` takes, and Landlock net rules match ports, not addresses |
+
+The seccomp filter denies `socket(AF_INET|AF_INET6, SOCK_DGRAM, …)`. That *is*
+expressible in BPF — three scalar arguments — unlike the address check, and it
+is stricter than Landlock's ABI 10 rights, which govern bind and connect rather
+than creation. It leaves `AF_UNIX` datagrams alone, so nothing in node breaks.
+
+The launcher asks for the **best ABI the kernel supports** rather than pinning a
+version (pinning V4 would leave UDP to Landlock on kernels that could close it)
+and reports what it actually enforced:
 
 ```
-anon-rpc-launch: landlock fully enforced (abi 4, fs, net: tcp)
-anon-rpc-launch: landlock fully enforced (abi 10, fs, net: tcp+udp)
+anon-rpc-launch: landlock fully enforced (abi 4, fs, net: tcp+udp)
 ```
 
-So on the 6.8 kernel this was developed against, "no ambient network" means **no
-ambient TCP**: a worker could still send UDP, and the harness should not claim
-otherwise. On ABI 10 it means both. ABI 4 is the floor — below it there are no
-network rights at all, and the launcher refuses to start rather than pretend.
+ABI 4 is the floor — below it there are no network rights at all, and the
+launcher refuses to start rather than pretend. In the bridged posture the child
+also gets **no resolver grants** (`resolv.conf`, `nsswitch.conf`, `gai.conf`,
+`hosts`): the host resolves names, and a process with no UDP socket could not
+ask anyway. A sandbox should not carry grants for a capability its process
+does not have.
 
-Untested: the ABI ≥ 5 paths. This kernel reports 4, so the higher presets are
-selected by code that has never run — and each raises the filesystem rights
+Still open: **abstract unix sockets**, which need Landlock scoping (ABI 6+) and
+are therefore also out of reach here. A worker could reach a local service
+listening on an abstract socket. Closing that with seccomp is not possible in
+the same way — `connect()` again — so it wants either ABI 6 or a netns.
+
+Untested: the **ABI ≥ 5 paths**. This kernel reports 4, so the higher presets
+are selected by code that has never run, and each raises the filesystem rights
 handled too (truncate at 3, ioctl_dev at 5), which could deny something node
-needs. Worth running the grant ladder on a newer kernel before trusting it.
+needs at startup. Worth running the grant ladder on a newer kernel first.
 
 ## Status
 
@@ -278,8 +299,11 @@ on both harnesses and a worker gets a documented code instead of a
   belt is inert here. On 25+, with `--allow-net` absent, whether operations on a
   *passed-in* descriptor are denied is untested — the permission model gates the
   `net` binding, not the fd. If it denies them, the seat belt fights the design.
-- **Seccomp** on top of Landlock. Landlock governs filesystem and TCP
-  bind/connect; it does not filter syscalls such as `ptrace`.
+- **More seccomp.** The filter today denies exactly one thing (IP datagram
+  sockets). Landlock does not filter syscalls such as `ptrace`, and a
+  general-purpose allow-list would be the next hardening — bearing in mind
+  that an over-tight filter breaks node in ways that surface as mysterious
+  startup crashes.
 - **Packaging.** Per-platform `optionalDependencies` (`@anon-rpc/launch-linux-x64`
   and friends) so no postinstall script or install-time network is needed, plus
   hash-pinning the launcher itself — a project premised on verifying delivered
