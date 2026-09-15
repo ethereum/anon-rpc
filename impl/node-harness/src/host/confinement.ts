@@ -148,10 +148,17 @@ export function spawnWorkerProcess(
     // network arrives as descriptors the host passes in. Landlock governs
     // opening, not existing fds, so a handed-in socket keeps working.
     //
-    // --no-udp is the seccomp half. Landlock only gained UDP rights at ABI 10
-    // (linux 7.2), so on the kernels anyone actually runs, --restrict-net alone
-    // would leave UDP wide open — including to the host's own loopback.
-    ...(opts.ambientNetwork ? [] : ["--restrict-net", "--no-udp"]),
+    // --no-udp and --no-unix are the seccomp half, covering the two things
+    // Landlock cannot reach on the kernels anyone actually runs: UDP (its
+    // network rights are TCP-only below ABI 10 / linux 7.2) and ABSTRACT unix
+    // sockets (which have no path for a filesystem rule to match, and need
+    // Landlock scoping at ABI 6). Path-bound unix sockets are already covered
+    // — connecting to one needs the path, and the path is not granted.
+    //
+    // The child never legitimately creates a socket of any kind: its IPC
+    // channel is an inherited descriptor, and a bridged socket is *received*
+    // on that channel rather than created.
+    ...(opts.ambientNetwork ? [] : ["--restrict-net", "--no-udp", "--no-unix"]),
     // The child reads its own host script. The worker bundle is NOT on disk —
     // it arrives over IPC as the bytes the harness already hash-verified — so
     // no grant is needed for it.

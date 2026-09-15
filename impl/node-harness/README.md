@@ -51,6 +51,29 @@ v25.0.0 (`--allow-net`), so on v22 it cannot restrict sockets at all. That is
 fine here — §6 does not deny the worker network, and a worker whose job is to
 reach an anonymizing network needs it.
 
+## The vm context is not a boundary, and the e2e proves it
+
+Worker code runs in a `node:vm` context with a curated set of globals — no
+`require`, no `process`, no dynamic import. That is hygiene, not security, and
+the test says so out loud rather than leaving it as a claim in a comment: the
+harness hands the context outer-realm functions (`fetch`, `console`,
+`setTimeout`), so `fetch.constructor` **is** the outer realm's `Function`, and
+one call gets worker code the real `process` object. It works, today.
+
+What stops it going further is everything below:
+
+| after escaping to `process` | | |
+|---|---|---|
+| `process.binding("tcp_wrap")` → internals, raw sockets | `ERR_ACCESS_DENIED` | `--permission` |
+| `import("node:net")` from outer-realm code | `ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING` | no host import callback |
+| `process.env` | 0 variables | spawned with `env: {}` |
+| filesystem, sockets, spawn | `EACCES` | Landlock + seccomp |
+
+Note the first row: `--permission` is doing real work here, closing the main
+route from `process` to internals. It is still a seat belt — upstream says it is
+bypassable — but it is the layer that makes a vm escape uninteresting rather
+than immediately fatal, which is worth knowing when deciding whether to keep it.
+
 ## The launcher
 
 Confinement cannot be applied from inside Node: the Landlock syscalls need FFI
@@ -247,10 +270,18 @@ also gets **no resolver grants** (`resolv.conf`, `nsswitch.conf`, `gai.conf`,
 ask anyway. A sandbox should not carry grants for a capability its process
 does not have.
 
-Still open: **abstract unix sockets**, which need Landlock scoping (ABI 6+) and
-are therefore also out of reach here. A worker could reach a local service
-listening on an abstract socket. Closing that with seccomp is not possible in
-the same way — `connect()` again — so it wants either ABI 6 or a netns.
+**Abstract unix sockets** are closed the same way. Landlock cannot reach them
+below ABI 6 (scoping) because they have no path for a filesystem rule to match
+— measured: a connect to an abstract name returned `ECONNREFUSED`, meaning the
+socket was created and the attempt made. Path-bound unix sockets were never
+exposed: `/run/systemd/private` returned `EACCES` from Landlock, since reaching
+one needs a path and the path is not granted.
+
+So the filter denies `socket(AF_UNIX, …)` outright in the bridged posture. The
+child never legitimately creates a socket of any kind — its IPC channel is an
+inherited descriptor, and a bridged socket is *received* on that channel rather
+than created — which the e2e confirms by still passing fd-handoff tests with
+creation denied.
 
 Untested: the **ABI ≥ 5 paths**. This kernel reports 4, so the higher presets
 are selected by code that has never run, and each raises the filesystem rights

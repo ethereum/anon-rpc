@@ -357,7 +357,7 @@ ok(`address policy refused a non-allow-listed destination (${sock.denied})`);
     LAUNCHER,
     [
       "--ro", dirname(process.execPath), "--ro", "/lib", "--ro", "/usr/lib", "--ro", "/proc",
-      "--rw", "/dev/null", "--ro", "/dev/urandom", "--ro", "/etc/ssl", "--restrict-net", "--no-udp",
+      "--rw", "/dev/null", "--ro", "/dev/urandom", "--ro", "/etc/ssl", "--restrict-net", "--no-udp", "--no-unix",
       "--", process.execPath, "--permission", "-e",
       `const n=require("node:net");const s=n.connect(${chain.address().port},"127.0.0.1");` +
         `s.on("connect",()=>{console.log("CONNECTED");process.exit(0)});` +
@@ -383,6 +383,77 @@ ok(`address policy refused a non-allow-listed destination (${sock.denied})`);
   if (net !== wantNet) fail(`abi ${abi} should deny ${wantNet}, reported ${net}`);
   ok(`landlock denies the child's own TCP connect (EACCES) at abi ${abi}, net: ${net}`);
 }
+
+/* --- 6. a worker that escapes the vm context, which it can --------------- */
+
+// `node:vm` is not a security boundary and this proves it rather than assuming
+// it: the harness hands the context outer-realm functions (fetch, console,
+// setTimeout), and `fetch.constructor` is therefore the OUTER realm's Function
+// constructor. One call and worker code holds the real `process`.
+//
+// That is fine, and is the whole reason the sandbox is a process and a kernel
+// ruleset rather than a vm context. This case asserts that the layers which do
+// matter still hold for a worker that has escaped: no internal bindings, no
+// environment, no sockets.
+const escapee = `
+(async () => {
+  const out = {};
+  try {
+    const F = fetch.constructor;          // outer-realm Function
+    const proc = F("return process")();
+    out.reachedProcess = !!proc && typeof proc.pid === "number";
+    out.env = proc.env ? Object.keys(proc.env).length : "no env";
+    // process.binding is the main route from \`process\` to internals, and so
+    // to raw sockets. --permission is what closes it.
+    try { out.binding = typeof proc.binding("tcp_wrap"); } catch (e) { out.binding = e.code ?? e.message; }
+    // A function built by the outer realm still cannot import: there is no
+    // host-defined import callback for code compiled this way.
+    try { await F("return import('node:net')")(); out.import = "GOT node:net"; }
+    catch (e) { out.import = e.code ?? e.message; }
+  } catch (e) { out.escapeFailed = e.message; }
+  anonRpcWorker.signalReady();
+  for (;;) {
+    const call = await anonRpcWorker.acceptCall();
+    call.respond({ status: 200, headers: [], body: new TextEncoder().encode(JSON.stringify(out)) });
+  }
+})();
+`;
+const escBytes = Buffer.from(escapee, "utf8");
+const escHash = "0x" + Buffer.from(keccak_256(escBytes)).toString("hex");
+const escResolver = createServer((_q, res) => {
+  res.writeHead(200, { "content-type": "text/javascript" });
+  res.end(escBytes);
+});
+await new Promise((r) => escResolver.listen(0, "127.0.0.1", r));
+cleanups.push(() => escResolver.close());
+const escUrl = `http://127.0.0.1:${escResolver.address().port}/w.js`;
+
+const escaper = new AnonRpcWorker({
+  address: SPECIFIER,
+  preExisting: {
+    rpcProvider: {
+      async request({ method, params }) {
+        if (method !== "eth_call") throw new Error("unexpected");
+        const data = params[0].data;
+        if (data === SEL_HASH) return "0x" + pad(escHash);
+        if (data === SEL_RESOLVERS) return encodeStringArray([escUrl]);
+        throw new Error("unexpected selector");
+      },
+    },
+  },
+});
+cleanups.push(() => escaper.close());
+await escaper.ready;
+const esc = await (await escaper.fetch("http://example.invalid/")).json();
+escaper.close();
+
+// Recorded, not asserted false: if a future node closes this the test should
+// say so rather than fail, because nothing here depends on it staying open.
+ok(`worker escapes the vm context to real \`process\`: ${esc.reachedProcess} (vm is not a boundary, by design)`);
+if (esc.env !== 0) fail(`escaped worker saw ${esc.env} environment variables, want 0`);
+if (esc.binding === "object") fail(`escaped worker reached process.binding: ${JSON.stringify(esc)}`);
+if (esc.import === "GOT node:net") fail(`escaped worker imported node:net: ${JSON.stringify(esc)}`);
+ok(`…and is still contained: binding ${esc.binding}, import ${esc.import}, env 0 vars`);
 
 console.log("\n✅ node-harness e2e passed");
 cleanup();

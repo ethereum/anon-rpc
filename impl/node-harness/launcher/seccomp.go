@@ -36,6 +36,7 @@ const (
 )
 
 const (
+	afUnix      = 1
 	afInet      = 2
 	afInet6     = 10
 	sockDgram   = 2
@@ -62,7 +63,7 @@ func auditArch() (uint32, error) {
 // Jump offsets are counted in instructions from the one AFTER the jump, so the
 // layout is written out explicitly rather than computed; a wrong offset here
 // silently allows what it was meant to deny.
-func denyUDPFilter(arch uint32) []unix.SockFilter {
+func denySocketsFilter(arch uint32, noUnix bool) []unix.SockFilter {
 	const (
 		ld  = unix.BPF_LD | unix.BPF_W | unix.BPF_ABS
 		jeq = unix.BPF_JMP | unix.BPF_JEQ | unix.BPF_K
@@ -70,6 +71,15 @@ func denyUDPFilter(arch uint32) []unix.SockFilter {
 		ret = unix.BPF_RET | unix.BPF_K
 	)
 	allow := uint32(unix.SECCOMP_RET_ALLOW)
+	// AF_UNIX jumps straight to the final deny (index 15) from index 7:
+	// 7 + 1 + 7. When unix sockets are permitted it falls through to the
+	// AF_INET checks instead. Counted by hand against the listing below,
+	// because an offset that lands one instruction early silently allows
+	// exactly what it was written to deny.
+	unixJt := uint8(7)
+	if !noUnix {
+		unixJt = 0
+	}
 	// ERRNO returns a failure to the caller instead of killing it: a worker
 	// that tries UDP gets EACCES and can carry on, which is the same shape as
 	// Landlock's refusal and keeps the two indistinguishable to worker code.
@@ -86,11 +96,17 @@ func denyUDPFilter(arch uint32) []unix.SockFilter {
 		{Code: jeq, K: uint32(unix.SYS_SOCKET), Jt: 1, Jf: 0},
 		{Code: ret, K: allow},
 
-		// 6: domain must be AF_INET or AF_INET6.
+		// 6: AF_UNIX is refused outright when asked for — the child never needs
+		// to create one. Its IPC channel is an inherited descriptor, and a
+		// passed socket is received on that channel rather than created, so
+		// nothing legitimate calls socket(AF_UNIX, …). Denying it closes
+		// abstract unix sockets, which Landlock cannot reach below ABI 6
+		// because they have no path for a filesystem rule to match.
 		{Code: ld, K: offArg0},
+		{Code: jeq, K: afUnix, Jt: unixJt, Jf: 0},
 		{Code: jeq, K: afInet, Jt: 2, Jf: 0},  // → type check
 		{Code: jeq, K: afInet6, Jt: 1, Jf: 0}, // → type check
-		{Code: ret, K: allow},                 // any other domain (AF_UNIX, …)
+		{Code: ret, K: allow},                 // any other domain
 
 		// 10: type, masked free of SOCK_NONBLOCK/SOCK_CLOEXEC.
 		{Code: ld, K: offArg1},
@@ -101,18 +117,18 @@ func denyUDPFilter(arch uint32) []unix.SockFilter {
 	}
 }
 
-// installDenyUDP loads the filter into the current process. It is irrevocable
+// installSeccompFilter loads the filter into the current process. It is irrevocable
 // and inherited across execve, like the Landlock ruleset, so node and anything
 // it could spawn (nothing: --permission denies that too) inherit it.
 //
 // PR_SET_NO_NEW_PRIVS must already be set; the kernel refuses an unprivileged
 // filter otherwise. main() sets it before calling this.
-func installDenyUDP() error {
+func installSeccompFilter(noUnix bool) error {
 	arch, err := auditArch()
 	if err != nil {
 		return err
 	}
-	filter := denyUDPFilter(arch)
+	filter := denySocketsFilter(arch, noUnix)
 	prog := unix.SockFprog{
 		Len:    uint16(len(filter)),
 		Filter: &filter[0],

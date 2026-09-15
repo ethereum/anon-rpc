@@ -48,6 +48,7 @@ type args struct {
 	ro, rw       []string
 	restrictNet  bool
 	noUDP        bool
+	noUnix       bool
 	connectPorts []uint16
 	bindPorts    []uint16
 	cmd          []string
@@ -55,7 +56,7 @@ type args struct {
 
 func usage(msg string) {
 	fmt.Fprintf(os.Stderr, "anon-rpc-launch: %s\n", msg)
-	fmt.Fprintln(os.Stderr, "usage: anon-rpc-launch [--ro PATH]... [--rw PATH]... [--restrict-net] [--no-udp] "+
+	fmt.Fprintln(os.Stderr, "usage: anon-rpc-launch [--ro PATH]... [--rw PATH]... [--restrict-net] [--no-udp] [--no-unix] "+
 		"[--connect-port N]... [--bind-port N]... -- CMD [ARGS]...")
 	os.Exit(2)
 }
@@ -86,6 +87,8 @@ func parse(argv []string) args {
 			a.restrictNet = true
 		case "--no-udp":
 			a.noUDP = true
+		case "--no-unix":
+			a.noUnix = true
 		case "--connect-port":
 			a.connectPorts = append(a.connectPorts, port("--connect-port"))
 		case "--bind-port":
@@ -180,8 +183,8 @@ func main() {
 	// landlock so a failure here cannot leave a half-configured sandbox that
 	// still looks enforced.
 	udpDenied := a.restrictNet && abi >= 10
-	if a.noUDP {
-		if err := installDenyUDP(); err != nil {
+	if a.noUDP || a.noUnix {
+		if err := installSeccompFilter(a.noUnix); err != nil {
 			fatal(fmt.Errorf("seccomp: %w", err))
 		}
 		udpDenied = true
