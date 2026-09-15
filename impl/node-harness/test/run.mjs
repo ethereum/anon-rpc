@@ -402,12 +402,21 @@ ok(`address policy refused a non-allow-listed destination (${sock.denied})`);
 // matter still hold for a worker that has escaped: no internal bindings, no
 // environment, no sockets.
 const escapee = `
+"use strict";
 (async () => {
   const out = {};
+  // Strict mode is already in force here: esbuild emits "use strict" and so
+  // does this bundle, and the escape below is unaffected by it — it is not a
+  // stack-walk, it is the Function constructor compiling in its own realm's
+  // global scope. Recorded so the mode is not mistaken for a mitigation.
+  out.strict = (function () { return this; })() === undefined;
   try {
     const F = fetch.constructor;          // outer-realm Function
     const proc = F("return process")();
     out.reachedProcess = !!proc && typeof proc.pid === "number";
+    // The capability object is the same door, which is why pruning the
+    // ambient globals would not close it: §7's API has to be host functions.
+    out.viaCapability = !!F2AndPid(anonRpcWorker.signalReady);
     out.env = proc.env ? Object.keys(proc.env).length : "no env";
     // process.binding is the main route from \`process\` to internals, and so
     // to raw sockets. --permission is what closes it.
@@ -417,6 +426,10 @@ const escapee = `
     try { await F("return import('node:net')")(); out.import = "GOT node:net"; }
     catch (e) { out.import = e.code ?? e.message; }
   } catch (e) { out.escapeFailed = e.message; }
+  function F2AndPid(hostFn) {
+    try { return typeof hostFn.constructor("return process")()?.pid === "number"; }
+    catch { return false; }
+  }
   anonRpcWorker.signalReady();
   for (;;) {
     const call = await anonRpcWorker.acceptCall();
@@ -455,7 +468,12 @@ escaper.close();
 
 // Recorded, not asserted false: if a future node closes this the test should
 // say so rather than fail, because nothing here depends on it staying open.
-ok(`worker escapes the vm context to real \`process\`: ${esc.reachedProcess} (vm is not a boundary, by design)`);
+if (!esc.strict) fail("the escapee worker is not strict; it must match a real esbuild bundle");
+ok(
+  `worker escapes the vm context to real \`process\`: ${esc.reachedProcess} ` +
+    `(strict mode ${esc.strict ? "on" : "off"}, via capability object ${esc.viaCapability}) ` +
+    `— vm is not a boundary, by design`,
+);
 if (esc.env !== 0) fail(`escaped worker saw ${esc.env} environment variables, want 0`);
 if (esc.binding === "object") fail(`escaped worker reached process.binding: ${JSON.stringify(esc)}`);
 if (esc.import === "GOT node:net") fail(`escaped worker imported node:net: ${JSON.stringify(esc)}`);

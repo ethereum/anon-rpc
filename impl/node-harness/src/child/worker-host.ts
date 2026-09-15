@@ -277,6 +277,26 @@ rpc.onEvent("init", (init: {
   // this module's locals (the IPC port, the abort map). This is hygiene, not a
   // security boundary: `node:vm` is not one, and does not need to be — the
   // process boundary already is.
+  //
+  // Concretely, and measured: any host function reachable from in there leaks
+  // the host realm. `fetch.constructor` is the OUTER realm's `Function`, and
+  // the Function constructor compiles its body in the global scope of the
+  // realm it came from — so `fetch.constructor("return process")()` hands
+  // worker code the real `process`. Two things follow, both of which have been
+  // tried and neither of which works:
+  //
+  //   * `'use strict'` does not help. It closes stack-walking via
+  //     arguments.callee and Function.prototype.caller, which is a different
+  //     family. The worker bundle is already strict (esbuild emits it) and the
+  //     escape works regardless.
+  //   * Pruning the ambient globals below does not help either, because
+  //     `anonRpcWorker.signalReady.constructor` is the same door — and the
+  //     capability API cannot not be host functions, since it IS the bridge.
+  //
+  // Closing it for real would mean no shared object graph at all: a separate
+  // V8 isolate (isolated-vm), which needs a native addon `--permission`
+  // denies. So the escape stays open by design, and test/run.mjs asserts that
+  // a worker which performs it is still contained by the layers underneath.
   const sandbox: Record<string, unknown> = {
     anonRpcWorker: api,
     // §3.2 notes a worker SHOULD minimise use of ambient APIs, but `fetch` is
