@@ -29,10 +29,10 @@ jobs:
       # the publish-script e2e against a local anvil chain).
       - uses: foundry-rs/foundry-toolchain@v1
 
-      # Go: builds the Landlock launcher the node harness spawns workers under.
-      # Its e2e refuses to run unconfined, so without this CI would skip the
-      # only test that proves the Node isolation story — and in CI a skip is a
-      # failure by design (see node-harness/test/run.mjs).
+      # Go: builds the Landlock launcher. The node harness no longer isolates
+      # workers with it — that is the QuickJS isolate's job now, and its e2e
+      # needs no toolchain and no particular OS — so this step only keeps the
+      # superseded kernel path compiling. Drop it if that path is deleted.
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"

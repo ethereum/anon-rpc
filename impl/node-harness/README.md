@@ -1,323 +1,351 @@
 # node-harness — anon-rpc for Node (prototype)
 
 A second implementation of [SPEC.md](../../SPEC.md) §3.1, for Node instead of
-the browser. The worker runs in a **Landlock-confined child process** rather
-than a Web Worker inside a null-origin iframe; the §7 capability API it sees is
-the same.
+the browser. The worker bundle runs inside a **QuickJS interpreter compiled to
+WASM**, on a `worker_thread`; the §7 capability API it sees is the same one the
+browser harness offers.
 
 It boots the real passthrough worker from a specifier read, verifies the
 bundle's `keccak256`, and answers `eth_blockNumber` through it. **Not yet a
 conforming harness** — see [Status](#status).
 
 ```sh
-npm run build:launcher    # Go toolchain; Linux only
 npm run build
-npm test                  # e2e: real bundle, confined, answering RPC
+npm test                    # e2e: real bundle, isolated, answering RPC
 
-node probe/run.mjs        # the grant-set ladder that established the sandbox
-node probe/run.mjs resolver
+node probe/qjs-probe.mjs    # what a bare isolate contains, and what it costs
+node probe/qjs-escape.mjs   # the escape routes, one per line
+node probe/qjs-isolate.mjs  # the guest's whole global, classified
+node probe/qjs-stack.mjs 65536   # where the stack budget has to sit
 ```
 
-Measured on Linux 6.8 aarch64, Landlock ABI 4, Node v22.20.0.
+Measured on Linux 6.8 aarch64, Node v22.20.0, quickjs-emscripten 0.32.0.
+Nothing here is Linux-specific.
 
 ## The question this answered first
 
 **Can a Node host confine an untrusted worker the way a browser does?**
-Yes — but the kernel has to do it, not Node.
 
-## Why the Node permission model cannot be the boundary
+This was answered twice, and the second answer replaced the first.
 
-`node --permission` denies `fs`, `child_process`, `worker_threads`, addons, WASI
-and FFI, which sounds sufficient. It is not, and upstream says so plainly:
-
-> This feature does not protect against malicious code. […] Malicious code can
-> bypass the permission model and execute arbitrary code without the
-> restrictions imposed by the permission model.
-
-anon-rpc's whole premise is running untrusted code, so this is disqualifying for
-the §6 boundary. Two measurements make it concrete:
-
-| | reads `~/.ssh/id_ed25519`? |
-|---|---|
-| `--permission --allow-fs-read=/`, no Landlock | **yes — 411 bytes** |
-| Landlock, `--permission --allow-fs-read=/` (runtime checks wide open) | no — `EACCES` |
-
-The second row is the important one: with Node's own checks disabled, the kernel
-still refuses. That is the boundary. `--permission` is kept as a cheap seat belt
-that catches a *buggy* worker, and is never described as the sandbox.
-
-Note also that the permission model gained no network dimension until Node
-v25.0.0 (`--allow-net`), so on v22 it cannot restrict sockets at all. That is
-fine here — §6 does not deny the worker network, and a worker whose job is to
-reach an anonymizing network needs it.
-
-## The vm context is not a boundary, and the e2e proves it
-
-Worker code runs in a `node:vm` context with a curated set of globals — no
-`require`, no `process`, no dynamic import. That is hygiene, not security, and
-the test says so out loud rather than leaving it as a claim in a comment: the
-harness hands the context outer-realm functions (`fetch`, `console`,
-`setTimeout`), so `fetch.constructor` **is** the outer realm's `Function`, and
-one call gets worker code the real `process` object. It works, today.
-
-What stops it going further is everything below:
-
-| after escaping to `process` | | |
+| | isolation strategy 1 | isolation strategy 2 (current) |
 |---|---|---|
-| `process.binding("tcp_wrap")` → internals, raw sockets | `ERR_ACCESS_DENIED` | `--permission` |
-| `import("node:net")` from outer-realm code | `ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING` | no host import callback |
-| `process.env` | 0 variables | spawned with `env: {}` |
-| filesystem, sockets, spawn | `EACCES` | Landlock + seccomp |
+| boundary | Landlock + seccomp around a child process | the interpreter |
+| worker runs in | `node:vm` context | QuickJS-WASM isolate |
+| portability | Linux ≥ 5.13, per-platform Go binary | anywhere Node runs |
+| guest's platform | ambient, confined after the fact | nothing; every capability granted |
+| realm escape | **open** (`fn.constructor` reaches the host realm) | **closed** |
+| CPU / memory limits | none | interrupt deadline + heap cap |
+| `fetch` | a platform fact | a grant the host mediates |
+| guest JS speed | V8 | interpreter, ~50× slower |
 
-Note the first row: `--permission` is doing real work here, closing the main
-route from `process` to internals. It is still a seat belt — upstream says it is
-bypassable — but it is the layer that makes a vm escape uninteresting rather
-than immediately fatal, which is worth knowing when deciding whether to keep it.
+Strategy 1 works, and the findings that produced it are kept
+[below](#the-superseded-kernel-strategy) — they are the reason strategy 2
+exists. But two of its costs turned out to be structural rather than
+incidental: it could only ever run on Linux, and the guest had an ambient
+platform that could be *confined* but never *withheld*.
 
-## The launcher
+## The guest starts with nothing
 
-Confinement cannot be applied from inside Node: the Landlock syscalls need FFI
-or a native addon, and `--permission` denies both. So `launcher/` is a ~190-line
-Go binary that applies a deny-by-default ruleset to itself and then `execve`s
-node. Landlock rules survive execve and cannot be revoked, so everything past
-the exec inherits them irreversibly.
-
-Go rather than Rust so that `CGO_ENABLED=0` produces one **static** binary per
-`GOOS`/`GOARCH` from a single build machine. A glibc-linked launcher will not
-run on an alpine-based image, which is exactly where this gets deployed; the
-static one does, and cross-compiles to amd64 and arm64 with no extra toolchain.
-
-Two properties make this fit anon-rpc's capability model well:
-
-- **Landlock governs opening paths, not existing file descriptors.** The harness
-  can open the IPC socket — and a socketpair per KPS stream — *before* spawning,
-  and those keep working inside the sandbox while the filesystem is otherwise
-  shut. Handed-in fds become the only authority: the same invariant the browser
-  harness gets from a null-origin iframe, for the same reason.
-- **It needs no privilege.** No root, no setuid, no namespaces, no daemon.
-
-## Minimal grant set
+A bare QuickJS context has the ECMAScript intrinsics and nothing else. Measured,
+not assumed — `probe/qjs-probe.mjs` prints the list:
 
 ```
---ro <node bin dir>        # execve + the loader reading the binary
---ro /lib --ro /usr/lib    # libc, libstdc++, NSS modules
---ro /proc                 # node reads /proc/self/*, meminfo, cpuinfo
---rw /dev/null --ro /dev/urandom
---ro /etc/ssl              # see below
---ro /etc/resolv.conf --ro /run/systemd/resolve \
---ro /etc/hosts --ro /etc/nsswitch.conf --ro /etc/gai.conf
+console  TextEncoder  URL  fetch  ReadableStream  AbortController
+crypto   setTimeout   structuredClone  WebAssembly  require  process
+  → all undefined
 ```
 
-Under it: entropy, DNS, TCP, a real TLS `fetch()` and ICU all work, while the
-host's home directory, `/etc/passwd`, `spawn`, `worker_threads` and `dlopen` are
-all denied. No blanket `/etc` and no blanket `/dev`.
+So the platform has to be built. The split is what matters:
 
-Two grants were not obvious and are worth keeping deliberate:
+- **`src/child/prelude.guest.js`** is evaluated inside the isolate and defines
+  `TextEncoder`, `TextDecoder`, `URL`, `URLSearchParams`, `AbortController`,
+  `ReadableStream`, `WritableStream`, `Headers`, `Response`, `structuredClone`.
+  All of it is pure computation — it encodes bytes, parses strings, queues
+  chunks — so handing it over grants no authority and needs no policy decision.
+- **Authority arrives through two functions**, `__host_send(method, json,
+  bytes?)` and `__host_request(method, json, bytes?)`. That is the entire host
+  interface. The prelude captures both in a closure and then **deletes them from
+  the global object**, so guest code cannot reach the raw bridge — only the §7
+  API assembled over it.
 
-- **`/etc/ssl`** — node *aborts on startup* without it, because OpenSSL `fopen`s
-  `openssl.cnf` from C, below the permission model. Only Landlock can let that
-  through, and the failure gives no hint that a sandbox is involved.
-- **`/run/systemd/resolve`** — `/etc/resolv.conf` is a symlink into `/run` on
-  systemd hosts and Landlock rules follow the target, so granting all of `/etc`
-  still leaves DNS broken with `EAI_AGAIN`.
+The e2e enumerates the guest's global and classifies every name, with nothing
+left over:
 
-`process.env` is **not** covered by either layer; the child must be spawned with
-`env: {}`. Node boots fine with zero variables. This matters more in Node than
-in a browser, since env is where a host keeps its keys — the direct analogue of
-the private-key clause in §6.
+```
+✓ raw host bridge unreachable; 80 globals total, all accounted for
+```
+
+63 ECMAScript intrinsics, 12 pure-computation classes, and this many
+authority-bearing names:
+
+```
+anonRpcWorker  console  crypto  setTimeout  clearTimeout
+setInterval    clearInterval    fetch (only if granted)
+```
+
+That is the whole list, and it is a list rather than an audit. The previous
+strategy could only ever answer "what can the ambient platform reach"; this one
+answers "what exists".
+
+## The realm escape is closed
+
+`node:vm` is not a security boundary, and the previous harness's e2e proved it
+rather than assuming it: the vm context is handed outer-realm functions, so
+`fetch.constructor` **is** the outer realm's `Function`, and the `Function`
+constructor compiles its body in the global scope of the realm it came from.
+One call and worker code holds the real `process`.
+
+That could not be fixed from inside. `'use strict'` does not help — it closes
+stack-walking via `arguments.callee` and `Function.prototype.caller`, a
+different family, and the real bundle was already strict because esbuild emits
+it. Pruning the ambient globals does not help either, because
+`anonRpcWorker.signalReady.constructor` is the same door, and §7's API *has* to
+be host functions since it is the bridge.
+
+A QuickJS isolate closes it structurally. A host function installed here is a
+QuickJS function object backed by a C callback, not a foreign JS function, so
+`fn.constructor` is the **guest's** `Function` and compiles in the guest's
+global scope:
+
+| | `node:vm` | QuickJS isolate |
+|---|---|---|
+| `fetch.constructor("return typeof process")()` | `"object"` | `"undefined"` |
+| `anonRpcWorker.signalReady.constructor(…)` | `"object"` | `"undefined"` |
+| `Object.getPrototypeOf(hostFn) === Function.prototype` | false (foreign) | **true (guest's own)** |
+| `import("node:fs")` | needs no callback → denied | rejects: no module loader exists |
+
+There is no shared object graph at all. Values cross as copies through the C
+API — a string, a number, an `ArrayBuffer` — so there is nothing to walk.
+
+## Resource limits, which `node:vm` has no usable form of
+
+§6 is about blast radius, and a worker that simply never returns is part of
+that. Landlock says nothing about it; `node:vm`'s `timeout` option does not
+apply to async work and cannot stop a running promise chain. QuickJS can:
+
+| hostile guest | result | how |
+|---|---|---|
+| `for(;;){}` | `interrupted` in ~800ms | interrupt handler against a wall-clock deadline |
+| `(function f(){return f()})()` | `stack overflow` | QuickJS stack budget |
+| `for(;;) a.push(new Uint8Array(1<<20))` | `out of memory` | runtime memory limit |
+| `let s="x"; for(…) s+=s` | `string too long` | QuickJS internal cap |
+
+Each surfaces to the host as a §12 worker failure, and the host keeps running.
+The e2e asserts all four *in the host's own process*, so reaching the end of
+the file is itself the assertion that none of them took it down.
+
+After an `out of memory` the runtime is still usable — a guest cannot poison
+the isolate by exhausting its heap.
+
+### The sharp edge: the stack budget must sit under the WASM stack
+
+QuickJS enforces its stack limit by comparing frame addresses against a budget.
+Compiled to WASM that budget is measured against the **WASM** stack, which
+emscripten fixes at 64KB when the variant is linked. A budget *larger* than the
+WASM stack therefore never fires: the WASM stack goes first, V8 raises
+`RangeError: Maximum call stack size exceeded` from inside the instance, and it
+unwinds straight through whatever called in.
+
+QuickJS's own default is 256KB. **So the default configuration lets a guest kill
+its host with three lines of JavaScript.** Bisected in `probe/qjs-stack.mjs`:
+
+| budget | plain recursion | recursion + alloc | `JSON.stringify` of a deep object |
+|---|---|---|---|
+| 256KB (default) | **host dies** | — | — |
+| 80KB | caught | caught | **host dies** |
+| 64KB | caught | caught | caught |
+
+The third column is the one that fails first as the budget rises, because that
+recursion happens in C inside QuickJS's serializer. This harness uses **48KB**
+for margin, since three probed shapes are not proof of every shape.
+
+The cost is guest recursion depth — about 276 frames at 48KB, 369 at 64KB.
+That is shallow, and it is a published-variant limit: lifting it means building
+a QuickJS variant with `-sSTACK_SIZE` raised, not tuning the number.
+
+The `worker_thread` is the backstop underneath. Even if some shape escapes the
+budget, it takes the thread down and the host sees a worker failure.
 
 ## How it fits together
 
 ```
-host process                                confined child process
-────────────                                ──────────────────────
+host process (main thread)                  worker_thread
+──────────────────────────                  ─────────────
 AnonRpcWorker (§5)
   readSpecifier ──── bootstrap RPC
   fetchAndVerifyBundle ── resolver
   keccak256 == workerHash  ✓
-  spawnWorkerProcess ─────────────────────▶ launcher: landlock, no_new_privs
-                                            └─ execve node --permission
-  await confined ◀──── "fully enforced" ─── worker-host.js
-  emit init { bundle bytes, config } ─────▶   vm context + anonRpcWorker (§7)
-                                              └─ runs the bundle
-  CallQueue (§8) ◀──── call.accept ─────────  acceptCall()
+  spawnIsolate ───────────────────────────▶ isolate-thread.js
+  emit init { bundle bytes, config,          └─ QuickJS runtime
+              capabilities, limits } ─────▶     ├─ memory cap, stack cap,
+                                                │  interrupt deadline
+                                                ├─ prelude.guest.js   (no authority)
+                                                └─ the bundle         (untrusted)
+  installFetchBridge  ◀── "fetch" ──────────  fetch(...)
+  installSocketBridge ◀── "socket.connect" ─  anonRpcWorker.socket.connect(...)
+  CallQueue (§8)      ◀── "call.accept" ────  acceptCall()
   fetch() ─────────────▶ queued
-                    ◀── call.respond ──────  call.respond(...)
+                      ◀── "call.respond" ───  call.respond(...)
 ```
 
 Three things about that order are deliberate:
 
-- **The bundle is verified before any sandbox exists**, on the host, and is
-  handed over as bytes rather than a path. There is no file for a third party
-  to swap between the hash check and execution, and the sandbox needs no
-  filesystem grant for it.
-- **Nothing is delivered until the kernel confirms enforcement.** The harness
-  awaits the launcher's one-line status before sending `init`, so untrusted
-  code never reaches a process whose confinement is unproven. Partial
-  enforcement is a hard error, not a log line.
-- **The environment is empty.** Neither Landlock nor `--permission` covers
-  `process.env`, and in Node that is where a host keeps its keys.
+- **The bundle is verified before the isolate exists**, on the host, and is
+  handed over as bytes rather than a path. There is no file for a third party to
+  swap between the hash check and execution.
+- **Only granted capabilities get a host half.** If `socket` is off, no
+  `socket.connect` handler is installed *and* the guest has no
+  `anonRpcWorker.socket` to call. There is nothing to filter because there is
+  nothing to ask.
+- **The thread is about liveness, not containment.** The sync QuickJS variant
+  runs guest code on the calling thread, so in-process a guest could block the
+  host's event loop for as long as its deadline allows. The isolate is the
+  boundary either way.
 
-## Consequences for the harness design
+## `fetch` is a capability here, not a platform
 
-1. **KPS cannot live inside the sandbox.** `@kpstreams`' transport depends on
-   `node-datachannel`, a native addon, and `--permission` denies `dlopen`
-   (`ERR_DLOPEN_DISABLED`) — as does any serious sandbox. So KPS stays
-   host-side and is bridged across the boundary, exactly as the browser harness
-   bridges it. The §7 capability API shape carries over unchanged; only the
-   transport under it differs.
-2. **The bundle need not touch the filesystem.** The harness already fetches and
-   hash-verifies worker bytes, so it can hand them over the IPC channel instead
-   of writing a file. That drops the `bundle dir` grant and leaves only node's
-   own runtime needs.
-3. **Landlock says nothing about resource exhaustion.** A worker that allocates
-   until the box dies is unaddressed. That is a separate axis — cgroups, most
-   cheaply via `systemd-run --user -p MemoryMax= -p CPUQuota=` — and not a
-   substitute for or successor to Landlock. `resourceLimits` is
-   `worker_threads`-only and so unavailable to a child process.
-4. **Confinement should be a pluggable strategy**, with the harness declining to
-   claim §6 unless a kernel-enforcing one is active. Hosts without Landlock
-   (kernels below 5.13, non-Linux) then get an explicit unconfined mode rather
-   than a silent downgrade. macOS would need `sandbox-exec`; Windows realistically
-   a container.
+This is the substantive difference from both the browser harness and strategy 1.
+In a Web Worker `fetch` is ambient; strategy 1 could only confine what it
+reached. Here there is no `fetch` unless the host installs one — and when it
+does, the host performs the request, so the address policy is a boundary rather
+than a filter:
+
+```
+✓ granted fetch refused loopback, RFC1918 and file:// by policy (permission-denied)
+```
+
+The reference passthrough worker — which answers every call with a plain
+`fetch`, the browser platform it was written against — runs **unmodified**
+against that granted `fetch`. So the §3.2 conformance target still works, while
+the host now sees every request it makes.
+
+```ts
+new AnonRpcWorker({ address })                                    // fetch on, socket off
+new AnonRpcWorker({ address, capabilities: { socket: true },
+                    network: { policy: { allow: ["10.0.0.0/8"] } } })
+```
+
+The default policy denies everything not globally routable — loopback, RFC1918,
+CGNAT, link-local (which on a cloud box is the host's IAM identity, and so
+arguably a §6 violation), ULA, multicast, and the IPv4-mapped forms of all of
+them — with an explicit allow-list, because a wallet pointing its worker at a
+node on localhost is a real deployment.
+
+Both capabilities resolve the name first and check the **resolved** address:
+checking a name and then connecting by name leaves a window in which the answer
+can change, and the guest controls the name.
 
 ## The socket capability (PROPOSED — not in SPEC.md)
 
 In a browser the worker cannot open raw TCP, which is why tor-js needs KPS
 gateways to reach the Tor network: the demo gateway in
 [adopters.json5](../../adopters.json5) exists only because of that limitation.
-A Node harness *can* offer real sockets — but handing the worker ambient ones
-also hands it the host's loopback and LAN, and `169.254.169.254`, which on a
-cloud box is the host's IAM identity and so arguably a §6 violation.
-
-So the worker gets no sockets of its own and asks the host instead:
+A Node harness can offer real sockets, so a native tor-js needs no gateway.
 
 ```
 worker: anonRpcWorker.socket.connect("1.2.3.4", 9001)
-  host:   resolve → address policy → net.connect → pass the descriptor
-worker: { readable, writable }  ← bytes flow child ↔ kernel ↔ network
+  host:   resolve → address policy → net.connect
+worker: { readable, writable }   ← chunks pulled one request at a time
 ```
 
-`--restrict-net` is on by default, so the child's own `connect()` returns
-`EACCES` from the kernel. Two properties make this work:
-
-- **Landlock governs *opening*, not existing descriptors.** A socket passed in
-  over IPC keeps working while every dial is denied. The descriptor is the
-  capability, in the literal OS sense — the same invariant the browser harness
-  gets from a null-origin iframe.
-- **The host is on the control path, not the data path.** Node closes the
-  sender's copy on send, so the handoff is a transfer of ownership: after it,
-  the harness structurally cannot observe the worker's traffic. No bytes cross
-  the RPC channel, and the backpressure is the kernel's socket buffer rather
-  than flow control of ours.
-
-The address policy runs **host-side**, which is the only reason it is worth
-writing: the same check inside the child would be a seat belt, since `node:vm`
-is not a security boundary. It denies everything not globally routable by
-default — loopback, RFC1918, CGNAT, link-local, ULA, multicast, and the
-IPv4-mapped forms of all of them — with an explicit allow-list, because a
-wallet pointing its worker at a node on localhost is a real deployment.
-
-`socket` is **absent**, not throwing, when unavailable — the opposite of the
+`socket` is **absent**, not throwing, when not granted — the opposite of the
 §10/§11 stubs. That difference is deliberate: a spec-mandated capability must
-always exist so a worker gets a documented `unsupported` code, while an
-optional one must be feature-testable, so `if (anonRpcWorker.socket)` answers
-truthfully and tor-js can fall back to gateways. §3.2's warning applies in
-full: a worker that requires this will not run in a browser.
+always exist so a worker gets a documented `unsupported` code, while an optional
+one must be feature-testable, so `if (anonRpcWorker.socket)` answers truthfully
+and tor-js can fall back to gateways. §3.2's warning applies in full: a worker
+that requires this will not run in a browser.
 
-**This is why `network.ambient` exists.** The reference passthrough worker
-answers calls with a plain `fetch` — the browser platform it was written
-against — and cannot run with the child's sockets denied. The host therefore
-says which kind of worker it is deploying:
+**One thing got worse here.** Strategy 1 passed the connected *descriptor* to
+the child over `SCM_RIGHTS` and then left the data path entirely — bytes went
+child ↔ kernel ↔ network, and the harness structurally could not observe the
+worker's traffic. A descriptor cannot move to a `worker_thread`, and a QuickJS
+guest could not use one anyway, so bytes are relayed in chunks instead. For a
+worker doing its own end-to-end encryption — which is the point of tor-js — the
+host sees ciphertext, so what this costs is copies, not confidentiality. But it
+is a real loss of a property strategy 1 had.
 
-```ts
-new AnonRpcWorker({ address, network: { ambient: true } })                  // browser-style worker
-new AnonRpcWorker({ address, network: { policy: { allow: ["10.0.0.0/8"] } } }) // bridged (default)
+Backpressure survives: the guest pulls one chunk per request and nothing is read
+from the peer until it asks, so the kernel's socket buffer still does the work.
+
+## What this costs
+
+- **Guest JS runs at interpreter speed.** QuickJS is roughly 50× slower than V8
+  on compute. For RPC-shaped work — parse JSON, transform, respond — that is
+  mostly irrelevant; for a worker doing its own cryptography in JS it is not.
+  Host calls cross at ~470k/sec, so the boundary itself is not the bottleneck.
+- **Guest recursion is capped near 276 frames** (see above).
+- **Startup is ~4ms** for the WASM module (process-wide, reused) plus ~2ms per
+  context.
+- **`crypto.subtle` is absent**, deliberately, rather than stubbed — a worker
+  needs to feature-detect it, not get something that lies.
+- **The platform is a subset.** `ReadableStream` has no `tee` or `pipeThrough`;
+  `Response` has no `clone` or `formData`. A correct small implementation beats
+  a half-correct full one, but a worker relying on the rest will notice.
+- **Handles are manually memory-managed**, and a leaked one makes QuickJS
+  `abort()` the whole process at teardown. Not a slow leak — a crash. Every
+  path in `isolate.ts` disposes.
+
+## The superseded kernel strategy
+
+Kept in the tree — `launcher/`, `src/host/confinement.ts`,
+`src/child/worker-host.ts`, `probe/run.mjs` — because its findings are why the
+current one exists. It is no longer reachable through the harness API.
+
+**Node's permission model cannot be the boundary.** `node --permission` denies
+`fs`, `child_process`, `worker_threads`, addons, WASI and FFI, which sounds
+sufficient. Upstream says otherwise: *"This feature does not protect against
+malicious code. […] Malicious code can bypass the permission model."* Measured:
+
+| | reads `~/.ssh/id_ed25519`? |
+|---|---|
+| `--permission --allow-fs-read=/`, no Landlock | **yes — 411 bytes** |
+| Landlock, `--permission --allow-fs-read=/` (runtime checks wide open) | no — `EACCES` |
+
+The second row is the point: with Node's own checks disabled, the kernel still
+refuses. Confinement cannot be applied from inside Node either — the Landlock
+syscalls need FFI or a native addon, and `--permission` denies both — so
+`launcher/` is a ~215-line Go binary that applies a deny-by-default ruleset to
+itself and then `execve`s node. Go rather than Rust so `CGO_ENABLED=0` produces
+one **static** binary per `GOOS`/`GOARCH`; a glibc-linked launcher will not run
+on an alpine image.
+
+**The minimal grant set**, derived by the ladder in `probe/run.mjs`:
+
+```
+--ro <node bin dir> --ro /lib --ro /usr/lib --ro /proc
+--rw /dev/null --ro /dev/urandom --ro /etc/ssl
+--ro /etc/resolv.conf --ro /run/systemd/resolve \
+--ro /etc/hosts --ro /etc/nsswitch.conf --ro /etc/gai.conf
 ```
 
-### What "no ambient network" covers, and which layer does it
+Two grants were not obvious: **`/etc/ssl`**, without which node *aborts on
+startup* because OpenSSL `fopen`s `openssl.cnf` from C below the permission
+model, giving no hint a sandbox is involved; and **`/run/systemd/resolve`**,
+because `/etc/resolv.conf` is a symlink into `/run` and Landlock follows the
+target, so granting all of `/etc` still leaves DNS broken with `EAI_AGAIN`.
+`process.env` is covered by neither layer, so the child is spawned with
+`env: {}` — in Node that is where a host keeps its keys, the direct analogue of
+§6's private-key clause.
 
-Landlock's network rights are **TCP-only from ABI 4 through 9**; ABI 10 adds UDP
-bind and connect/send, and ABI 10 is **Linux 7.2**. Ubuntu 24.04 LTS ships 6.8
-and its HWE kernel is 7.0, so ABI 10 is out of reach for most deployments for a
-while yet: UDP being open is the *normal* case, not a rare degraded one.
+**Landlock's network rights are TCP-only from ABI 4 through 9**; UDP arrives at
+ABI 10, which is Linux 7.2, so UDP being open is the normal case rather than a
+rare degraded one. A seccomp filter closes that gap plus abstract unix sockets
+(no path for a filesystem rule to match), and denies 23 syscalls the worker has
+no business making. That group earns its keep only after a V8 or JIT bug — the
+moment every JS-level check including `--permission` is worthless — and it was
+added because a probe run *inside* the sandbox reached exactly what the same
+probe reached outside it, with everything apparently denied actually being
+denied by the distro's `ptrace_scope` and `perf_event_paranoid` sysctls rather
+than by us.
 
-So the two layers split the job:
-
-| | mechanism | why that one |
-|---|---|---|
-| TCP connect/bind | Landlock | address-independent, kernel-enforced, cheap |
-| UDP socket creation | seccomp | Landlock cannot, below ABI 10 |
-| *which* address | host-side policy | neither can: seccomp cannot dereference the `sockaddr` pointer `connect()` takes, and Landlock net rules match ports, not addresses |
-
-The seccomp filter denies `socket(AF_INET|AF_INET6, SOCK_DGRAM, …)`. That *is*
-expressible in BPF — three scalar arguments — unlike the address check, and it
-is stricter than Landlock's ABI 10 rights, which govern bind and connect rather
-than creation. It leaves `AF_UNIX` datagrams alone, so nothing in node breaks.
-
-The launcher asks for the **best ABI the kernel supports** rather than pinning a
-version (pinning V4 would leave UDP to Landlock on kernels that could close it)
-and reports what it actually enforced:
-
-```
-anon-rpc-launch: landlock fully enforced (abi 4, fs, net: tcp+udp)
-```
-
-ABI 4 is the floor — below it there are no network rights at all, and the
-launcher refuses to start rather than pretend. In the bridged posture the child
-also gets **no resolver grants** (`resolv.conf`, `nsswitch.conf`, `gai.conf`,
-`hosts`): the host resolves names, and a process with no UDP socket could not
-ask anyway. A sandbox should not carry grants for a capability its process
-does not have.
-
-**Abstract unix sockets** are closed the same way. Landlock cannot reach them
-below ABI 6 (scoping) because they have no path for a filesystem rule to match
-— measured: a connect to an abstract name returned `ECONNREFUSED`, meaning the
-socket was created and the attempt made. Path-bound unix sockets were never
-exposed: `/run/systemd/private` returned `EACCES` from Landlock, since reaching
-one needs a path and the path is not granted.
-
-So the filter denies `socket(AF_UNIX, …)` outright in the bridged posture. The
-child never legitimately creates a socket of any kind — its IPC channel is an
-inherited descriptor, and a bridged socket is *received* on that channel rather
-than created — which the e2e confirms by still passing fd-handoff tests with
-creation denied.
-
-### Syscalls the worker has no business making
-
-The socket rules above are posture-dependent; the rest of the filter is always
-installed, in both postures. It denies 23 calls, in four groups: reading or
-steering another process (`ptrace`, `process_vm_readv`/`writev`, `pidfd_open`,
-`pidfd_getfd`, `pidfd_send_signal`), `io_uring` (an alternate submission path
-for file and network work, blocked by Docker's and Chrome's sandboxes as an
-escape class), facilities a typical host gates by sysctl (`perf_event_open`,
-`bpf`, `userfaultfd`, the keyring calls), and rearranging the system the
-Landlock ruleset was written against (`unshare`, `setns`, `mount`, `umount2`,
-`pivot_root`, the file-handle calls, `memfd_create`).
-
-Signals are the one conditional rule: `kill` and `tgkill` are allowed **to self
-only**, compared against a pid baked into the filter — `execve` does not change
-it, so the launcher and the node it becomes are one process. Self-signalling has
-to work, because glibc's `abort()` raises `SIGABRT` via `tgkill` and node uses
-`abort()` for fatal errors; denying it would turn a clean crash into a hang.
-
-Why this group exists at all, measured: before it, a probe run **inside** the
-sandbox reached exactly what the same probe reached **outside** it. Everything
-that appeared to be denied was denied by yama's `ptrace_scope=1`,
-`perf_event_paranoid=4` and `unprivileged_userfaultfd=0` — the distro's
-choices, not ours, and any of them may be set differently on a deployment host.
-The errno is the tell: those refusals were `EPERM`, and ours are `EACCES`.
-
-This layer earns its keep precisely when the others have failed. Worker code
-cannot reach raw syscalls today — the vm escape yields `process`, but
-`--permission` closes `process.binding` and there is no FFI — so syscall
-filtering is defence against **post-exploitation**, after a V8 or JIT bug, which
-is exactly the moment every JS-level check including `--permission` is worthless.
-
-Untested: the **ABI ≥ 5 paths**. This kernel reports 4, so the higher presets
-are selected by code that has never run, and each raises the filesystem rights
-handled too (truncate at 3, ioctl_dev at 5), which could deny something node
-needs at startup. Worth running the grant ladder on a newer kernel first.
+**The two can be layered.** Running the QuickJS isolate inside the confined
+process was measured to need **no additional grants** — WASM instantiation
+touches nothing the seccomp filter denies, and the interpreter is inlined into
+the built file as base64, so there is no `.wasm` to locate or grant. That makes
+strategy 1 available as defence in depth on Linux rather than something the
+current design has to replace. It is not wired into the harness API, because
+"instead" was the point.
 
 ## Status
 
@@ -327,61 +355,50 @@ Working, and deliberately incomplete. What a §3.1 conforming harness still owes
 |----|---|---|
 | §4 | specifier read, resolver fetch, keccak verify | **done** (`kps:` entries ignored per §4.1) |
 | §5 | `AnonRpcWorker`, `ready`, `fetch`, `close` | **done** |
-| §6 | isolation | **done** for Linux + Landlock; no clause in the spec yet |
+| §6 | isolation | **done**, portable; no clause in the spec yet |
 | §7 | `config`, `signalReady`/`signalFailed`, `log` | **done** |
 | §8 | ordered, buffered, one-at-a-time calls | **done** (shares `CallQueue` with the browser harness) |
 | §9 | fetch payloads | bodies **buffered**, not streamed — see below |
 | §10 | KPS | **stubs** that throw `unsupported` (§12) |
 | §11 | storage | **stubs** that throw `unsupported` (§12) |
-| — | `socket` (proposed, not in the spec) | **done** — bridged over fd-passing |
+| — | `socket` (proposed, not in the spec) | **done** — bridged, chunked |
+| — | `fetch` as a grant | **done** — host-performed, policy-checked |
 
 The two stubs are why this is not conforming: §3.1 requires a harness to
 implement the semantics of every capability it exposes. They are exposed as
-throwing stubs rather than omitted so that `anonRpcWorker` has the same shape
-on both harnesses and a worker gets a documented code instead of a
-`TypeError` on `undefined`.
+throwing stubs rather than omitted so that `anonRpcWorker` has the same shape on
+both harnesses and a worker gets a documented code instead of a `TypeError` on
+`undefined`.
 
 ### Not yet established
 
-- **Streams for §9 bodies.** Node's IPC cannot transfer a `ReadableStream`, so
-  fetch bodies are still buffered at whichever end holds them. The socket
-  capability shows the way out: a descriptor crosses fine and carries its own
-  backpressure, so a body could ride a socketpair the same way. Not done.
-- **KPS over the same mechanism.** A KPS stream is a userspace object inside the
-  host, so there is no descriptor to pass — but the host can make a
-  `socketpair`, pass one end, and pump. The child would then wrap a descriptor
-  into `{ readable, writable }` for both capabilities, with one code path and
-  kernel backpressure either way. The asymmetry is that for KPS the host stays
-  on the data path and cannot not.
-- **`RLIMIT_NOFILE`.** Every bridged socket is a descriptor in both processes,
-  and Tor is not shy about connections. There is a `maxConcurrent` cap
-  (default 256) returning §12 `queue-full`, but the right number should come
-  from measuring what tor-js actually opens.
-- **`--permission` on Node ≥ 25.** v22 has no network permission, so the seat
-  belt is inert here. On 25+, with `--allow-net` absent, whether operations on a
-  *passed-in* descriptor are denied is untested — the permission model gates the
-  `net` binding, not the fd. If it denies them, the seat belt fights the design.
-- **Inverting the syscall filter.** The filesystem and the network are both
-  expressed as allow-lists — deny everything, grant a measured minimum. The
-  syscall filter is the one axis still expressed as a **deny-list**, which is
-  why it looks inconsistent: it is.
-
-  A seccomp allow-list is the normal answer (Chrome, OpenSSH, systemd's
-  `SystemCallFilter=@system-service`), and this repo already has the method —
-  the filesystem grant set was derived by a ladder that measured what node
-  needs, and seccomp's `SECCOMP_RET_LOG` supports the same learning mode.
-
-  The reason not to do it naively: a derived-minimal list is brittle. Syscalls
-  used only on error paths, under memory pressure, during TLS renegotiation, or
-  by a *different* worker's workload will not appear in a test run and will then
-  fail in production as a baffling `EACCES`. That is why Docker ships ~350
-  allowed syscalls rather than a tight derived set. Start from a curated base
-  minus the dangerous groups, not from zero.
-- **Packaging.** Per-platform `optionalDependencies` (`@anon-rpc/launch-linux-x64`
-  and friends) so no postinstall script or install-time network is needed, plus
-  hash-pinning the launcher itself — a project premised on verifying delivered
-  bytes should not ask anyone to trust an opaque binary from a registry.
+- **Streams for §9 bodies.** Only JSON and bytes cross into the isolate, so
+  fetch bodies are buffered at whichever end holds them. The socket capability
+  shows the way out — a chunk protocol with pull-driven backpressure — and a
+  body could ride the same one. Not done.
+- **KPS.** `@kpstreams`' transport depends on `node-datachannel`, a native
+  addon, which a QuickJS guest could not load under any circumstances. So KPS
+  stays host-side and is bridged, exactly as the browser harness bridges it —
+  the §7 shape carries over unchanged, only the transport differs. The chunk
+  protocol the socket capability already uses is the obvious mechanism.
+- **`crypto.subtle`.** Absent today. Bridging it means deciding whether key
+  material may live host-side on the guest's behalf, which is a §6 question and
+  not only an API one.
+- **A bigger WASM stack.** 276 guest frames is tight. Building a QuickJS variant
+  with `-sSTACK_SIZE` raised would lift it, at the cost of owning the build and
+  hash-pinning the `.wasm` — which a project premised on verifying delivered
+  bytes should probably do anyway.
+- **Guest CPU accounting.** The deadline is wall-clock per entry into the guest,
+  which bounds a single runaway turn but not a guest that burns 90% of a core
+  forever in short bursts. A budget across turns would.
+- **The interpreter's own memory safety.** QuickJS is C. A bug in it gives an
+  attacker the WASM linear memory — which is a sandboxed `ArrayBuffer`, so
+  escaping *that* additionally needs a V8 WASM bug. That is a much better
+  position than a V8 bug alone, but it is two bugs rather than none, and it is
+  the honest statement of what this boundary is worth.
 - **What a §6 clause for a native harness should say.** Per this repo's usual
-  order, spec text waits until the implementation has taught us the wording.
-  The open question is whether it names a mechanism, as the browser clause
-  does, or states properties and leaves the mechanism to the harness.
+  order, spec text waits until the implementation has taught us the wording. The
+  open question is whether it names a mechanism, as the browser clause does, or
+  states properties — "the worker's platform is exactly what the harness
+  installs" is now a property a harness can actually be held to, which it was
+  not when the answer was "confine the ambient one".

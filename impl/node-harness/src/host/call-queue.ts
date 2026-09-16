@@ -56,9 +56,19 @@ export class CallQueue<T> {
     return true;
   }
 
-  /** Drop all queued items and reject every pending take(). */
-  rejectAll(err: unknown): void {
-    this.#items.length = 0;
+  /**
+   * Drop every queued item and reject every pending take(), returning the
+   * items that were dropped.
+   *
+   * The return value is the point. An item in this queue is a call some caller
+   * is still awaiting, and the queue holds no way to reject it — so emptying
+   * the array is not cancelling the call, it is losing it, and the caller waits
+   * forever. Whoever queued the items has to settle them; returning them here
+   * is what makes forgetting to hard.
+   */
+  rejectAll(err: unknown): T[] {
+    const dropped = this.#items.splice(0);
     for (const w of this.#waiters.splice(0)) w.reject(err);
+    return dropped;
   }
 }

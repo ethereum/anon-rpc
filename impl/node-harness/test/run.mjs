@@ -1,20 +1,22 @@
 // End-to-end: the REAL passthrough worker bundle, hash-verified from a
-// specifier read, running inside a Landlock-confined child process, answering
-// a JSON-RPC request through the harness's anonymized fetch.
+// specifier read, running inside a QuickJS-WASM isolate on a worker_thread,
+// answering a JSON-RPC request through the harness's anonymized fetch.
 //
 // Hermetic and chain-free. §5 takes the bootstrap provider as an injectable
 // dependency, so the specifier read is stubbed with the ABI encoding a real
 // contract would return — which exercises the same decode path as mainnet
-// without needing anvil. The bundle bytes, the keccak256 check, the sandbox and
+// without needing anvil. The bundle bytes, the keccak256 check, the isolate and
 // the capability API are all the real thing.
 //
-// Skips (rather than fails) where the platform cannot run it, except in CI.
+// No platform skip. That is the headline difference from the previous
+// strategy's e2e, which could only run on Linux 5.13+ with a Go-built launcher
+// present: the boundary is now the interpreter, so this runs anywhere Node does.
 
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { keccak_256 } from "@noble/hashes/sha3";
 
@@ -22,24 +24,12 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const HARNESS = resolve(HERE, "..");
 const IMPL = resolve(HARNESS, "..");
 const BUNDLE = resolve(HARNESS, "../passthrough-worker/dist/passthrough-worker.js");
-const LAUNCHER = resolve(HARNESS, "launcher/anon-rpc-launch");
 
 const cleanups = [];
 const cleanup = () => cleanups.splice(0).reverse().forEach((f) => { try { f(); } catch {} });
 process.on("exit", cleanup);
 const fail = (m) => { console.error("❌ " + m); cleanup(); process.exit(1); };
 const ok = (m) => console.log("  ✓ " + m);
-const skip = (m) => {
-  // In CI a skip would hide a broken build as green.
-  if (process.env.CI) fail(`${m} (required in CI)`);
-  console.log(`⚠ ${m} — skipping node-harness e2e`);
-  process.exit(0);
-};
-
-if (process.platform !== "linux") skip(`confinement is Linux-only for now (this is ${process.platform})`);
-// The launcher needs a Go toolchain, so it is not built by `npm run build`;
-// without it there is no sandbox and nothing here is worth asserting.
-if (!existsSync(LAUNCHER)) skip("launcher not built (`npm run build:launcher`, needs Go)");
 
 // Fresh build of the harness and of the worker bundle this pins by hash — the
 // test must run against the artifacts, not against whatever dist/ held before.
@@ -79,19 +69,37 @@ const selector = (sig) => "0x" + Buffer.from(keccak_256(Buffer.from(sig))).toStr
 const SEL_HASH = selector("workerHash()");
 const SEL_RESOLVERS = selector("workerResolvers()");
 
-/* --- a resolver serving the pinned bytes -------------------------------- */
-
+/** Serve some bytes as a worker bundle, and a provider that pins their hash. */
+async function publish(source) {
+  const bytes = Buffer.isBuffer(source) ? source : Buffer.from(source, "utf8");
+  const hash = "0x" + Buffer.from(keccak_256(bytes)).toString("hex");
+  const server = createServer((_q, res) => {
+    served++;
+    res.writeHead(200, { "content-type": "text/javascript" });
+    res.end(bytes);
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  cleanups.push(() => server.close());
+  const url = `http://127.0.0.1:${server.address().port}/w.js`;
+  return {
+    hash,
+    url,
+    provider: {
+      async request({ method, params }) {
+        if (method !== "eth_call") throw new Error(`unexpected bootstrap call: ${method}`);
+        specifierReads++;
+        const data = params[0].data;
+        if (data === SEL_HASH) return "0x" + pad(hash);
+        if (data === SEL_RESOLVERS) return encodeStringArray([url]);
+        throw new Error(`unexpected selector: ${data}`);
+      },
+    },
+  };
+}
 let served = 0;
-const resolver = createServer((_q, res) => {
-  served++;
-  res.writeHead(200, { "content-type": "text/javascript" });
-  res.end(bundle);
-});
-await new Promise((r) => resolver.listen(0, "127.0.0.1", r));
-cleanups.push(() => resolver.close());
-const resolverUrl = `http://127.0.0.1:${resolver.address().port}/worker.js`;
+let specifierReads = 0;
 
-/* --- an "ethereum node" for the worker to reach through the sandbox ----- */
+/* --- an "ethereum node" for the worker to reach through the isolate ----- */
 
 let workerRpcCalls = 0;
 const chain = createServer((req, res) => {
@@ -99,7 +107,7 @@ const chain = createServer((req, res) => {
   let body = "";
   req.on("data", (d) => (body += d));
   req.on("end", () => {
-    const { id, method } = JSON.parse(body);
+    const { id, method } = JSON.parse(body || "{}");
     const result = method === "eth_blockNumber" ? "0x1312d00" : null;
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ jsonrpc: "2.0", id, result }));
@@ -109,39 +117,27 @@ await new Promise((r) => chain.listen(0, "127.0.0.1", r));
 cleanups.push(() => chain.close());
 const chainUrl = `http://127.0.0.1:${chain.address().port}/`;
 
-/* --- the bootstrap provider (§4: used once, host-side, not anonymized) -- */
-
-let specifierReads = 0;
-const makeProvider = (hash) => ({
-  async request({ method, params }) {
-    if (method !== "eth_call") throw new Error(`unexpected bootstrap call: ${method}`);
-    specifierReads++;
-    const data = params[0].data;
-    if (data === SEL_HASH) return "0x" + pad(hash);
-    if (data === SEL_RESOLVERS) return encodeStringArray([resolverUrl]);
-    throw new Error(`unexpected selector: ${data}`);
-  },
-});
+// Every worker below that needs the local chain carries this. Loopback is
+// DENIED by default — the granted fetch is policy-checked, which is the point
+// of it being a grant — and a wallet pointing its worker at a node on
+// localhost is exactly why the escape hatch exists.
+const allowLoopback = { policy: { allow: ["127.0.0.1/32"] } };
 
 /* --- 1. the happy path -------------------------------------------------- */
 
-// `network.ambient` because the passthrough worker answers calls with a plain
-// `fetch` — the browser platform it was written against. Without it the child
-// has no sockets of its own and this worker cannot reach anything; that is the
-// default, and the socket-capability test below is the other half of the story.
+const real = await publish(bundle);
 const worker = new AnonRpcWorker({
   address: SPECIFIER,
-  preExisting: { rpcProvider: makeProvider(workerHash) },
-  network: { ambient: true },
+  preExisting: { rpcProvider: real.provider },
+  network: allowLoopback,
 });
 cleanups.push(() => worker.close());
 
 await worker.ready;
-ok("worker booted: specifier read, bundle keccak-verified, running confined");
+ok("worker booted: specifier read, bundle keccak-verified, running in a QuickJS isolate");
 if (specifierReads !== 2) fail(`expected 2 specifier reads, got ${specifierReads}`);
 if (served !== 1) fail(`expected the resolver to be hit once, got ${served}`);
 
-// A call issued through the sandbox, out to a server only the worker touches.
 const res = await worker.fetch(chainUrl, {
   method: "POST",
   headers: { "content-type": "application/json" },
@@ -151,7 +147,11 @@ if (res.status !== 200) fail(`worker fetch returned ${res.status}`);
 const { result } = await res.json();
 if (result !== "0x1312d00") fail(`unexpected RPC result: ${result}`);
 if (workerRpcCalls !== 1) fail(`expected 1 call to reach the chain, got ${workerRpcCalls}`);
-ok(`eth_blockNumber answered through the confined worker (${result})`);
+ok(`eth_blockNumber answered through the isolated worker (${result})`);
+
+// The reference worker is unmodified: it calls the ambient `fetch` it was
+// written against, which here is a capability the host installed and mediates.
+ok("the unmodified reference bundle ran — `fetch` as a grant, not a platform fact");
 
 // Buffered, ordered delivery (§8): several calls in flight at once.
 const many = await Promise.all(
@@ -179,80 +179,161 @@ ok(`fetch after close() rejects (${closedErr.message})`);
 
 /* --- 3. §4: bytes that do not match the pinned hash never run ---------- */
 
-const wrongHash = "0x" + "11".repeat(32);
-const tampered = new AnonRpcWorker({
-  address: SPECIFIER,
-  preExisting: { rpcProvider: makeProvider(wrongHash) },
-  network: { ambient: true },
-});
-let hashErr;
-await tampered.ready.catch((e) => (hashErr = e));
-tampered.close();
-if (!hashErr) fail("a bundle whose hash does not match the specifier was accepted");
-if (!/hash mismatch/.test(hashErr.message)) fail(`expected a hash-mismatch error, got: ${hashErr.message}`);
-ok("bundle rejected when keccak256 does not match workerHash (§4)");
+{
+  const wrongHash = "0x" + "11".repeat(32);
+  const tampered = new AnonRpcWorker({
+    address: SPECIFIER,
+    network: allowLoopback,
+    preExisting: {
+      rpcProvider: {
+        async request({ method, params }) {
+          if (method !== "eth_call") throw new Error("unexpected");
+          const data = params[0].data;
+          if (data === SEL_HASH) return "0x" + pad(wrongHash);
+          if (data === SEL_RESOLVERS) return encodeStringArray([real.url]);
+          throw new Error("unexpected selector");
+        },
+      },
+    },
+  });
+  let hashErr;
+  await tampered.ready.catch((e) => (hashErr = e));
+  tampered.close();
+  if (!hashErr) fail("a bundle whose hash does not match the specifier was accepted");
+  if (!/hash mismatch/.test(hashErr.message)) fail(`expected a hash-mismatch error, got: ${hashErr.message}`);
+  ok("bundle rejected when keccak256 does not match workerHash (§4)");
+}
 
-/* --- 4. the sandbox is real: the worker cannot read the host's files ---- */
+/** Run a worker whose only job is to report a JSON object, and return it. */
+async function interrogate(source, init = {}) {
+  const pub = await publish(source);
+  const w = new AnonRpcWorker({
+    address: SPECIFIER,
+    preExisting: { rpcProvider: pub.provider },
+    ...init,
+  });
+  cleanups.push(() => w.close());
+  await w.ready;
+  const out = await (await w.fetch("http://report.invalid/")).json();
+  w.close();
+  return out;
+}
 
-// A worker that tries what a hostile one would. Same boot path, different
-// bundle — so this asserts the boundary, not the passthrough worker's manners.
-const hostile = `
+/* --- 4. zero ambient capability: there is nothing to reach ------------- */
+
+// The previous strategy's equivalent test asserted that a hostile worker's
+// access was DENIED. Here the interesting result is that the names it would
+// use do not exist: no process, no require, no import, no ambient platform.
+const hostile = await interrogate(
+  `
 (async () => {
-  const out = { fs: "?", spawn: "?", env: Object.keys(globalThis.process?.env ?? {}).length };
-  try { const fs = await import("node:fs"); fs.readFileSync(${JSON.stringify(process.env.HOME + "/.ssh/id_ed25519")}); out.fs = "READ IT"; }
-  catch (e) { out.fs = e.code ?? e.message; }
-  try { const cp = await import("node:child_process"); cp.execSync("id"); out.spawn = "RAN IT"; }
-  catch (e) { out.spawn = e.code ?? e.message; }
+  const out = {};
+  out.process = typeof globalThis.process;
+  out.require = typeof globalThis.require;
+  out.globalCount = Object.getOwnPropertyNames(globalThis).length;
+  // The node:vm escape, all three doors. Each one returns the GUEST's
+  // Function, which compiles in the GUEST's global scope.
+  out.viaCapability = String(anonRpcWorker.signalReady.constructor("return typeof process")());
+  out.viaConsole = String(console.log.constructor("return typeof globalThis.require")());
+  out.ctorIsOurs = anonRpcWorker.signalReady.constructor === Function;
+  // No module loader is installed, so nothing can be loaded.
+  try { await import("node:fs"); out.import = "GOT node:fs"; } catch (e) { out.import = e.message; }
+  // The raw bridge the platform is built on was deleted from the global.
+  out.bridge = ["__host_send","__host_request","__host_random","__host_url"]
+    .map((n) => typeof globalThis[n]).join(",");
   anonRpcWorker.signalReady();
   for (;;) {
     const call = await anonRpcWorker.acceptCall();
     call.respond({ status: 200, headers: [], body: new TextEncoder().encode(JSON.stringify(out)) });
   }
 })();
-`;
-const hostileBytes = Buffer.from(hostile, "utf8");
-const hostileHash = "0x" + Buffer.from(keccak_256(hostileBytes)).toString("hex");
-const hostileResolver = createServer((_q, res) => {
-  res.writeHead(200, { "content-type": "text/javascript" });
-  res.end(hostileBytes);
-});
-await new Promise((r) => hostileResolver.listen(0, "127.0.0.1", r));
-cleanups.push(() => hostileResolver.close());
-const hostileUrl = `http://127.0.0.1:${hostileResolver.address().port}/w.js`;
+`,
+  { capabilities: { fetch: false } },
+);
 
-const probe = new AnonRpcWorker({
-  address: SPECIFIER,
-  network: { ambient: true },
-  preExisting: {
-    rpcProvider: {
-      async request({ method, params }) {
-        if (method !== "eth_call") throw new Error("unexpected");
-        const data = params[0].data;
-        if (data === SEL_HASH) return "0x" + pad(hostileHash);
-        if (data === SEL_RESOLVERS) return encodeStringArray([hostileUrl]);
-        throw new Error("unexpected selector");
-      },
-    },
-  },
-});
-cleanups.push(() => probe.close());
-await probe.ready;
-const report = await (await probe.fetch("http://example.invalid/")).json();
-probe.close();
+if (hostile.process !== "undefined") fail(`the guest has a \`process\`: ${JSON.stringify(hostile)}`);
+if (hostile.require !== "undefined") fail(`the guest has \`require\`: ${JSON.stringify(hostile)}`);
+if (hostile.viaCapability !== "undefined" || hostile.viaConsole !== "undefined") {
+  fail(`the realm escape WORKED: ${JSON.stringify(hostile)}`);
+}
+if (!hostile.ctorIsOurs) fail(`a host function's constructor is foreign: ${JSON.stringify(hostile)}`);
+if (hostile.import === "GOT node:fs") fail(`the guest imported node:fs: ${JSON.stringify(hostile)}`);
+if (hostile.bridge !== "undefined,undefined,undefined,undefined") {
+  fail(`the raw host bridge is reachable: ${hostile.bridge}`);
+}
+ok(
+  `realm escape is CLOSED: fn.constructor is the guest's Function, ` +
+    `\`return process\` gives ${hostile.viaCapability}`,
+);
+ok(`guest has no process, no require, no module loader (import: "${hostile.import}")`);
+ok(`raw host bridge unreachable; ${hostile.globalCount} globals total, all accounted for`);
 
-if (report.fs === "READ IT") fail(`the worker read the host's private key: ${JSON.stringify(report)}`);
-if (report.spawn === "RAN IT") fail(`the worker spawned a process: ${JSON.stringify(report)}`);
-if (report.env !== 0) fail(`the worker saw ${report.env} environment variables, want 0`);
-// Which layer refused matters for what this proves. Worker code cannot reach
-// node's builtins at all (no `process`, no dynamic import in its vm context),
-// so it is stopped before `--permission` or Landlock is consulted. That is the
-// strongest outcome, but it means THIS test does not exercise the kernel —
-// probe/run.mjs is the test that does, by running a probe with full node
-// access as the child's own script and confirming the kernel denies it.
-ok(`worker cannot reach node builtins: fs ${report.fs}, spawn ${report.spawn}, env 0 vars`);
-ok("(kernel-layer denial is covered separately by probe/run.mjs)");
+/* --- 5. a capability that is off is ABSENT, not filtered --------------- */
 
-/* --- 5. the bridged socket capability (PROPOSED, not in SPEC.md) -------- */
+const absent = await interrogate(
+  `
+(async () => {
+  const out = {
+    fetch: typeof globalThis.fetch,
+    socket: typeof anonRpcWorker.socket,
+    // §10/§11 are REQUIRED but unimplemented, so they are present and throw
+    // \`unsupported\` (§12) — the opposite convention to an optional capability.
+    kps: typeof anonRpcWorker.kps,
+    storage: typeof anonRpcWorker.storage,
+  };
+  try { await anonRpcWorker.kps.dial("x"); } catch (e) { out.kpsCode = e.code; }
+  try { await anonRpcWorker.storage.get("k"); } catch (e) { out.storageCode = e.code; }
+  anonRpcWorker.signalReady();
+  for (;;) {
+    const call = await anonRpcWorker.acceptCall();
+    call.respond({ status: 200, headers: [], body: new TextEncoder().encode(JSON.stringify(out)) });
+  }
+})();
+`,
+  { capabilities: { fetch: false, socket: false } },
+);
+if (absent.fetch !== "undefined") fail(`fetch present when not granted: ${JSON.stringify(absent)}`);
+if (absent.socket !== "undefined") fail(`socket present when not granted: ${JSON.stringify(absent)}`);
+if (absent.kps !== "object" || absent.storage !== "object") {
+  fail(`a REQUIRED capability was absent rather than throwing: ${JSON.stringify(absent)}`);
+}
+if (absent.kpsCode !== "unsupported" || absent.storageCode !== "unsupported") {
+  fail(`§10/§11 stubs did not report code "unsupported": ${JSON.stringify(absent)}`);
+}
+ok("an ungranted optional capability is absent (`if (anonRpcWorker.socket)` answers truthfully)");
+ok(`an unimplemented REQUIRED capability is present and throws "unsupported" (§12)`);
+
+/* --- 6. the granted fetch is policy-checked ---------------------------- */
+
+// Ambient fetch never was. This is the substantive gain: the host performs the
+// request, so the address policy is a boundary rather than a filter.
+const policed = await interrogate(
+  `
+(async () => {
+  const out = {};
+  try { const r = await fetch(${JSON.stringify(chainUrl)}); out.loopback = r.status; }
+  catch (e) { out.loopback = e.code ?? e.message; }
+  try { await fetch("http://10.1.2.3/"); out.rfc1918 = "ALLOWED"; }
+  catch (e) { out.rfc1918 = e.code ?? e.message; }
+  try { await fetch("file:///etc/passwd"); out.file = "ALLOWED"; }
+  catch (e) { out.file = e.code ?? e.message; }
+  anonRpcWorker.signalReady();
+  for (;;) {
+    const call = await anonRpcWorker.acceptCall();
+    call.respond({ status: 200, headers: [], body: new TextEncoder().encode(JSON.stringify(out)) });
+  }
+})();
+`,
+  { capabilities: { fetch: true } }, // NO allow-list: loopback must be refused
+);
+if (policed.loopback !== "permission-denied") {
+  fail(`the granted fetch reached loopback with no allow-list: ${JSON.stringify(policed)}`);
+}
+if (policed.rfc1918 !== "permission-denied") fail(`fetch reached RFC1918: ${JSON.stringify(policed)}`);
+if (policed.file !== "permission-denied") fail(`fetch accepted a file:// URL: ${JSON.stringify(policed)}`);
+ok(`granted fetch refused loopback, RFC1918 and file:// by policy (${policed.loopback})`);
+
+/* --- 7. the bridged socket capability (PROPOSED, not in SPEC.md) ------- */
 
 // A plain TCP peer, not the JSON-RPC server above: the point of this capability
 // is raw bytes, which is what a native tor-js needs in order to talk to relays
@@ -268,23 +349,12 @@ await new Promise((r) => tcp.listen(0, "127.0.0.1", r));
 cleanups.push(() => tcp.close());
 const TCP_PORT = tcp.address().port;
 
-// A worker in the default posture: no sockets of its own (landlock denies every
-// TCP connect), reaching the network only through `anonRpcWorker.socket`. This
-// is the shape a native tor-js would use to skip the KPS gateway.
-//
-// It reports what it found so the assertions below can tell the two failure
-// modes apart: a capability that is missing, versus one that is refused.
-const socketWorker = `
+const sock = await interrogate(
+  `
 (async () => {
-  const out = { hasSocket: !!anonRpcWorker.socket, ownDial: "?", bridged: "?", denied: "?" };
-
-  // 1. Can it dial for itself? It should not even have the means to try.
-  try { const net = await import("node:net"); net.connect(80, "127.0.0.1"); out.ownDial = "REACHED node:net"; }
-  catch (e) { out.ownDial = e.code ?? e.message; }
-
-  // 2. The bridged capability, against the allow-listed chain.
+  const out = { hasSocket: !!anonRpcWorker.socket };
   try {
-    const s = await anonRpcWorker.socket.connect(${JSON.stringify("127.0.0.1")}, CHAIN_PORT);
+    const s = await anonRpcWorker.socket.connect("127.0.0.1", ${TCP_PORT});
     const w = s.writable.getWriter();
     await w.write(new TextEncoder().encode("GET / HTTP/1.1\\r\\nHost: x\\r\\nConnection: close\\r\\n\\r\\n"));
     await w.close();
@@ -292,192 +362,68 @@ const socketWorker = `
     let text = "";
     for (;;) { const { value, done } = await r.read(); if (done) break; text += new TextDecoder().decode(value); }
     out.bridged = text.split("\\r\\n")[0];
-    out.remote = s.remoteAddress.port === CHAIN_PORT ? "port matches" : "port mismatch";
-  } catch (e) { out.bridged = "ERROR " + (e.code ?? e.message); }
-
-  // 3. A destination the policy does not allow.
+    out.body = text.endsWith("hello");
+    out.remote = s.remoteAddress.port === ${TCP_PORT} ? "port matches" : "port mismatch";
+    out.closed = JSON.stringify(await s.closed);
+  } catch (e) { out.bridged = "ERROR " + (e.code ?? "?") + ": " + e.message; }
+  // A destination the policy does not allow.
   try { await anonRpcWorker.socket.connect("10.1.2.3", 80); out.denied = "ALLOWED"; }
   catch (e) { out.denied = e.code ?? e.message; }
-
   anonRpcWorker.signalReady();
   for (;;) {
     const call = await anonRpcWorker.acceptCall();
     call.respond({ status: 200, headers: [], body: new TextEncoder().encode(JSON.stringify(out)) });
   }
 })();
-`.replace(/CHAIN_PORT/g, String(TCP_PORT));
-
-const sockBytes = Buffer.from(socketWorker, "utf8");
-const sockHash = "0x" + Buffer.from(keccak_256(sockBytes)).toString("hex");
-const sockResolver = createServer((_q, res) => {
-  res.writeHead(200, { "content-type": "text/javascript" });
-  res.end(sockBytes);
-});
-await new Promise((r) => sockResolver.listen(0, "127.0.0.1", r));
-cleanups.push(() => sockResolver.close());
-const sockUrl = `http://127.0.0.1:${sockResolver.address().port}/w.js`;
-
-const socketed = new AnonRpcWorker({
-  address: SPECIFIER,
-  // The default posture — no `ambient` — plus an allow-list for the local
-  // chain. Loopback is denied by default, and a wallet pointing its worker at
-  // a node on localhost is exactly why the escape hatch exists.
-  network: { policy: { allow: ["127.0.0.1/32"] } },
-  preExisting: {
-    rpcProvider: {
-      async request({ method, params }) {
-        if (method !== "eth_call") throw new Error("unexpected");
-        const data = params[0].data;
-        if (data === SEL_HASH) return "0x" + pad(sockHash);
-        if (data === SEL_RESOLVERS) return encodeStringArray([sockUrl]);
-        throw new Error("unexpected selector");
-      },
-    },
-  },
-});
-cleanups.push(() => socketed.close());
-await socketed.ready;
-const sock = await (await socketed.fetch("http://example.invalid/")).json();
-socketed.close();
+`,
+  { capabilities: { fetch: false, socket: true }, network: allowLoopback },
+);
 
 if (!sock.hasSocket) fail("anonRpcWorker.socket was absent when the harness granted it");
-if (sock.ownDial === "REACHED node:net") fail(`the worker reached node:net: ${JSON.stringify(sock)}`);
 if (!/^HTTP\/1\.1 /.test(sock.bridged)) fail(`bridged socket did not carry HTTP: ${JSON.stringify(sock)}`);
+if (!sock.body) fail(`bridged socket lost the body: ${JSON.stringify(sock)}`);
 if (sock.remote !== "port matches") fail(`remoteAddress wrong: ${JSON.stringify(sock)}`);
 if (sock.denied !== "permission-denied") fail(`policy did not refuse 10.1.2.3: ${JSON.stringify(sock)}`);
-ok(`bridged socket carried a real connection ("${sock.bridged}") with no sockets of the worker's own`);
+if (tcpConns !== 1) fail(`expected 1 TCP connection, got ${tcpConns}`);
+ok(`bridged socket carried a real connection ("${sock.bridged}"), closed: ${sock.closed}`);
 ok(`address policy refused a non-allow-listed destination (${sock.denied})`);
 
-// The kernel layer under it: the same child, asked directly. This is what
-// proves the sandbox rather than the vm context — probe/run.mjs runs the full
-// ladder, this asserts the one property the capability depends on.
-{
-  const { spawnSync } = await import("node:child_process");
-  const r = spawnSync(
-    LAUNCHER,
-    [
-      "--ro", dirname(process.execPath), "--ro", "/lib", "--ro", "/usr/lib", "--ro", "/proc",
-      "--rw", "/dev/null", "--ro", "/dev/urandom", "--ro", "/etc/ssl", "--restrict-net", "--no-udp", "--no-unix",
-      "--", process.execPath, "--permission", "-e",
-      `const n=require("node:net");const s=n.connect(${chain.address().port},"127.0.0.1");` +
-        `s.on("connect",()=>{console.log("CONNECTED");process.exit(0)});` +
-        `s.on("error",e=>{console.log(e.code);process.exit(0)});`,
-    ],
-    { encoding: "utf8", timeout: 20_000, env: {} },
-  );
-  const verdict = (r.stdout ?? "").trim();
-  if (verdict !== "EACCES") {
-    fail(`--restrict-net did not deny a direct dial from the child (got ${verdict || r.stderr})`);
-  }
+/* --- 8. resource limits, which node:vm has no usable form of ----------- */
 
-  // The launcher asks for the best ABI the kernel offers and says what it got.
-  // Asserting the shape catches a regression to a pinned version, which would
-  // silently leave UDP open on kernels that can close it (ABI 10+).
-  const posture = (r.stderr ?? "").match(
-    /landlock fully enforced \(abi (\d+), fs, net: ([^,)]+), syscalls: (\d+) denied\)/,
-  );
-  if (!posture) fail(`launcher did not report its enforcement posture: ${r.stderr}`);
-  const [, abi, net, denied] = posture;
-  // The syscall deny-list is the layer that matters after a V8 or JIT bug,
-  // when every JS-level check including --permission is worthless. Asserting
-  // it is non-empty catches a launcher that silently stopped installing it.
-  if (Number(denied) < 20) fail(`only ${denied} syscalls denied; the deny-list looks truncated`);
-  if (Number(abi) < 4) fail(`launcher accepted landlock abi ${abi}, below the floor of 4`);
-  // seccomp closes the UDP gap that landlock leaves below abi 10, so the
-  // posture is the same on every supported kernel.
-  const wantNet = "tcp+udp";
-  if (net !== wantNet) fail(`abi ${abi} should deny ${wantNet}, reported ${net}`);
-  ok(`landlock denies the child's own TCP connect (EACCES) at abi ${abi}, net: ${net}, ${denied} syscalls denied`);
+// A guest that never yields, never returns, or eats all the memory it can.
+// Each of these would hang or kill the previous harness's child; here the
+// isolate reports a worker failure and the host keeps running. The strongest
+// assertion in this file is that the process gets to the end of it.
+for (const [label, body, want] of [
+  ["infinite loop", "for(;;){}", /interrupt/i],
+  ["deep recursion", "(function f(){ return f() })()", /stack overflow/i],
+  ["heap exhaustion", "const a=[]; for(;;) a.push(new Uint8Array(1<<20));", /memory/i],
+]) {
+  const pub = await publish(`anonRpcWorker.signalReady(); ${body}`);
+  const w = new AnonRpcWorker({
+    address: SPECIFIER,
+    preExisting: { rpcProvider: pub.provider },
+    capabilities: { fetch: false },
+    // A short deadline so the loop case does not spend the default 5s.
+    limits: { deadlineMs: 750, memoryBytes: 32 * 1024 * 1024 },
+  });
+  cleanups.push(() => w.close());
+  let err;
+  const started = Date.now();
+  await w.ready.catch((e) => (err = e));
+  // signalReady() runs before the hostile line, so `ready` may resolve first;
+  // the failure then arrives on the next call instead.
+  if (!err) await w.fetch("http://report.invalid/").catch((e) => (err = e));
+  const ms = Date.now() - started;
+  w.close();
+  if (!err || !want.test(err.message)) {
+    fail(`hostile guest "${label}" was not contained: ${err?.message ?? "no error"}`);
+  }
+  ok(`hostile guest contained: ${label} → ${err.message.slice(0, 60)} (${ms}ms)`);
 }
 
-/* --- 6. a worker that escapes the vm context, which it can --------------- */
-
-// `node:vm` is not a security boundary and this proves it rather than assuming
-// it: the harness hands the context outer-realm functions (fetch, console,
-// setTimeout), and `fetch.constructor` is therefore the OUTER realm's Function
-// constructor. One call and worker code holds the real `process`.
-//
-// That is fine, and is the whole reason the sandbox is a process and a kernel
-// ruleset rather than a vm context. This case asserts that the layers which do
-// matter still hold for a worker that has escaped: no internal bindings, no
-// environment, no sockets.
-const escapee = `
-"use strict";
-(async () => {
-  const out = {};
-  // Strict mode is already in force here: esbuild emits "use strict" and so
-  // does this bundle, and the escape below is unaffected by it — it is not a
-  // stack-walk, it is the Function constructor compiling in its own realm's
-  // global scope. Recorded so the mode is not mistaken for a mitigation.
-  out.strict = (function () { return this; })() === undefined;
-  try {
-    const F = fetch.constructor;          // outer-realm Function
-    const proc = F("return process")();
-    out.reachedProcess = !!proc && typeof proc.pid === "number";
-    // The capability object is the same door, which is why pruning the
-    // ambient globals would not close it: §7's API has to be host functions.
-    out.viaCapability = !!F2AndPid(anonRpcWorker.signalReady);
-    out.env = proc.env ? Object.keys(proc.env).length : "no env";
-    // process.binding is the main route from \`process\` to internals, and so
-    // to raw sockets. --permission is what closes it.
-    try { out.binding = typeof proc.binding("tcp_wrap"); } catch (e) { out.binding = e.code ?? e.message; }
-    // A function built by the outer realm still cannot import: there is no
-    // host-defined import callback for code compiled this way.
-    try { await F("return import('node:net')")(); out.import = "GOT node:net"; }
-    catch (e) { out.import = e.code ?? e.message; }
-  } catch (e) { out.escapeFailed = e.message; }
-  function F2AndPid(hostFn) {
-    try { return typeof hostFn.constructor("return process")()?.pid === "number"; }
-    catch { return false; }
-  }
-  anonRpcWorker.signalReady();
-  for (;;) {
-    const call = await anonRpcWorker.acceptCall();
-    call.respond({ status: 200, headers: [], body: new TextEncoder().encode(JSON.stringify(out)) });
-  }
-})();
-`;
-const escBytes = Buffer.from(escapee, "utf8");
-const escHash = "0x" + Buffer.from(keccak_256(escBytes)).toString("hex");
-const escResolver = createServer((_q, res) => {
-  res.writeHead(200, { "content-type": "text/javascript" });
-  res.end(escBytes);
-});
-await new Promise((r) => escResolver.listen(0, "127.0.0.1", r));
-cleanups.push(() => escResolver.close());
-const escUrl = `http://127.0.0.1:${escResolver.address().port}/w.js`;
-
-const escaper = new AnonRpcWorker({
-  address: SPECIFIER,
-  preExisting: {
-    rpcProvider: {
-      async request({ method, params }) {
-        if (method !== "eth_call") throw new Error("unexpected");
-        const data = params[0].data;
-        if (data === SEL_HASH) return "0x" + pad(escHash);
-        if (data === SEL_RESOLVERS) return encodeStringArray([escUrl]);
-        throw new Error("unexpected selector");
-      },
-    },
-  },
-});
-cleanups.push(() => escaper.close());
-await escaper.ready;
-const esc = await (await escaper.fetch("http://example.invalid/")).json();
-escaper.close();
-
-// Recorded, not asserted false: if a future node closes this the test should
-// say so rather than fail, because nothing here depends on it staying open.
-if (!esc.strict) fail("the escapee worker is not strict; it must match a real esbuild bundle");
-ok(
-  `worker escapes the vm context to real \`process\`: ${esc.reachedProcess} ` +
-    `(strict mode ${esc.strict ? "on" : "off"}, via capability object ${esc.viaCapability}) ` +
-    `— vm is not a boundary, by design`,
-);
-if (esc.env !== 0) fail(`escaped worker saw ${esc.env} environment variables, want 0`);
-if (esc.binding === "object") fail(`escaped worker reached process.binding: ${JSON.stringify(esc)}`);
-if (esc.import === "GOT node:net") fail(`escaped worker imported node:net: ${JSON.stringify(esc)}`);
-ok(`…and is still contained: binding ${esc.binding}, import ${esc.import}, env 0 vars`);
+// Reached only if the host survived every case above.
+ok("host process survived every hostile guest");
 
 console.log("\n✅ node-harness e2e passed");
 cleanup();

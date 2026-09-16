@@ -1,18 +1,20 @@
-// Builds the harness's two execution contexts:
+// Builds the harness's execution contexts:
 //
-//   host.js         ESM  — the library entry, run by the host application
-//   worker-host.js  ESM  — the script `node --permission` runs INSIDE the
-//                          confined child: it receives the verified bundle
-//                          over IPC and gives it the §7 capability API
+//   host.js           ESM — the library entry, run by the host application
+//   isolate-thread.js ESM — runs on a worker_thread and owns the QuickJS
+//                           isolate the worker bundle executes in
+//   worker-host.js    ESM — the SUPERSEDED node:vm + Landlock path, kept
+//                           because its findings are still the reason the
+//                           QuickJS one exists (see README.md)
 //
-// Unlike the browser harness, worker-host is NOT inlined into host.js. There
-// the null-origin iframe cannot load a host-origin script and must be handed
-// source text; here the child is a real process that reads a real file, and
-// the harness grants Landlock read access to this directory. A file on disk
-// also means node parses it normally, so stack traces point at real lines.
+// isolate-thread bundles its dependencies rather than resolving them at
+// runtime, which matters for one of them in particular: the QuickJS variant
+// ships its WASM as base64 inside a .mjs, so esbuild inlines the interpreter
+// into this file and there is no .wasm to locate, load or grant access to.
 //
 // The Go launcher is built separately (`npm run build:launcher`) so that
-// `npm run build --workspaces` does not require a Go toolchain.
+// `npm run build --workspaces` does not require a Go toolchain. It is only
+// needed for the superseded path.
 
 import { build } from "esbuild";
 import { mkdir, rm } from "node:fs/promises";
@@ -43,9 +45,15 @@ await build({
   packages: "external",
 });
 
-// worker-host runs with an empty environment inside a sandbox that grants read
-// access to this file and nothing else of ours, so its dependencies are bundled
-// in rather than resolved from node_modules at runtime.
+// The isolate thread. Its dependencies — including the QuickJS interpreter —
+// are bundled in, so the built file is self-contained.
+await build({
+  ...common,
+  entryPoints: ["src/child/isolate-thread.ts"],
+  outfile: `${outdir}/isolate-thread.js`,
+});
+
+// The superseded node:vm path, still built so its e2e keeps running.
 await build({
   ...common,
   entryPoints: ["src/child/worker-host.ts"],

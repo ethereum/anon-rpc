@@ -2,56 +2,81 @@
 //
 // Same shape as the browser harness's AnonRpcWorker, over a different
 // boundary: instead of a Web Worker inside a null-origin iframe, the worker
-// runs in a Landlock-confined child process (see confinement.ts and
-// ../../README.md). The §7 capability API the worker sees is identical, which
-// is the property Appendix A claims and this file is the second data point for.
+// bundle runs in a QuickJS interpreter compiled to WASM, on a worker_thread.
+// The §7 capability API the worker sees is identical, which is the property
+// Appendix A claims and this file is the second data point for.
+//
+// The substantive difference from both the browser harness and this harness's
+// earlier Landlock-process strategy: the guest has NO ambient platform. A
+// browser Web Worker comes with `fetch`, and the process-based path could only
+// confine what `fetch` reached. Here there is nothing to confine — the isolate
+// has no network, no filesystem and no syscalls — so every capability is
+// something this file decides to install. `fetch` included.
 
 import { CallQueue } from "./call-queue.js";
-import { spawnWorkerProcess, type Confinement } from "./confinement.js";
+import { spawnIsolate, type IsolateLimits, type SpawnedIsolate } from "./isolation.js";
 import { installSocketBridge } from "./socket-bridge-host.js";
+import { installFetchBridge } from "./fetch-bridge-host.js";
 import type { AddressPolicy } from "./address-policy.js";
 import { fetchAndVerifyBundle, readSpecifier } from "./specifier.js";
 import { Rpc, RpcError, abortError, type PortLike } from "../protocol.js";
-import type {
-  AnonFetchResponse,
-  AnonRequestInit,
-  HeaderList,
-  WorkerInit,
-} from "../spec-types.js";
+import type { GuestPayload, GuestReply } from "../child/isolate-thread.js";
+import type { AnonFetchResponse, AnonRequestInit, HeaderList, WorkerInit } from "../spec-types.js";
 
 export { RpcError } from "../protocol.js";
-export type { Confinement } from "./confinement.js";
+export type { IsolateLimits } from "./isolation.js";
 
 export type NodeWorkerInit = WorkerInit & {
-  /** Defaults to Landlock confinement; see Confinement for the opt-out. */
-  confinement?: Confinement;
   /**
-   * The worker's network. By default it gets none of its own — Landlock denies
-   * every TCP connect in the child — and reaches the outside through the
-   * bridged `anonRpcWorker.socket` capability, which this host mediates.
+   * What the guest is given. Both default to the reference worker's needs:
+   * `fetch` on, `socket` off.
    *
-   * `ambient: true` instead leaves the child's own sockets working and does NOT
-   * offer the capability, which is what a worker written against the browser
-   * platform needs (the reference passthrough worker answers calls with a plain
-   * `fetch`). It is the weaker setting: such a worker can reach the host's
-   * loopback and LAN.
+   * There is no "ambient" setting and no way to ask for one — that is the
+   * point of the isolation strategy. A capability that is off is not filtered,
+   * it is absent, and `if (anonRpcWorker.socket)` in worker code answers
+   * truthfully.
    */
-  network?: {
-    ambient?: boolean;
-    /** Address policy for the bridged capability. Ignored when ambient. */
-    policy?: AddressPolicy;
-    /** Cap on concurrent bridged sockets; each is an fd in both processes. */
-    maxConcurrent?: number;
+  capabilities?: {
+    /**
+     * A bridged `fetch`, performed by the host under its address policy. On by
+     * default because a worker that cannot reach the network cannot forward
+     * RPC, which is the entire job; the policy, not the grant, is what keeps
+     * it from reaching the host's own network.
+     */
+    fetch?: boolean;
+    /**
+     * Bridged TCP (`anonRpcWorker.socket`), also under the address policy.
+     * Off by default. This is what lets a native tor-js reach the Tor network
+     * without KPS gateways.
+     */
+    socket?: boolean;
   };
+
+  /** Shared by both network capabilities. */
+  network?: {
+    /**
+     * Which addresses either capability may reach. Deny-by-default against the
+     * host's own network: loopback, RFC1918, CGNAT, link-local (where cloud
+     * instance metadata, and therefore the host's IAM identity, lives).
+     */
+    policy?: AddressPolicy;
+    /** Cap on concurrent bridged sockets. */
+    maxConcurrent?: number;
+    /** The `fetch` the host performs with. Injectable so tests need no network. */
+    fetchImpl?: typeof fetch;
+  };
+
+  /** Guest heap cap and execution deadline. See isolate.ts. */
+  limits?: IsolateLimits;
 };
 
 /**
  * A queued inbound fetch call, waiting for the worker to accept it.
  *
- * `wire` is what crosses the boundary; `signal` deliberately does not. An
- * AbortSignal is not structured-cloneable, so the host keeps it and forwards
- * aborts as a `call.abort` event, which the child turns back into a real
- * signal for the worker (§9).
+ * `signal` deliberately does not cross: nothing but JSON and bytes reaches the
+ * guest, so the host keeps the signal and forwards aborts as a `call.abort`
+ * event, which the prelude turns back into a real AbortSignal for the worker
+ * (§9).
  */
 type PendingCall = {
   id: number;
@@ -75,8 +100,8 @@ export class AnonRpcWorker {
   // Set once the worker has failed or been closed. Failure is final (§7), so
   // this is the single gate every later call checks.
   #dead?: Error;
-  #child?: ReturnType<typeof spawnWorkerProcess>;
-  #disposeSocketBridge?: () => void;
+  #isolate?: SpawnedIsolate;
+  #disposers: (() => void)[] = [];
 
   constructor(init: NodeWorkerInit) {
     this.ready = new Promise<void>((res, rej) => {
@@ -99,109 +124,141 @@ export class AnonRpcWorker {
     }
 
     // §4: read the pinned hash, fetch bytes from a resolver, accept only bytes
-    // whose keccak256 matches. This happens on the HOST, before any sandbox
+    // whose keccak256 matches. This happens on the HOST, before the isolate
     // exists — the bytes are verified before anything is asked to run them.
     const spec = await readSpecifier(provider, init.address);
     const bundle = await fetchAndVerifyBundle(spec);
 
-    const confinement = init.confinement ?? { kind: "landlock" };
-    if (confinement.kind === "none" && !confinement.acknowledgeUnconfined) {
-      throw new Error("confinement { kind: 'none' } requires acknowledgeUnconfined: true");
-    }
+    const capabilities = {
+      fetch: init.capabilities?.fetch ?? true,
+      socket: init.capabilities?.socket ?? false,
+    };
 
-    const ambient = init.network?.ambient ?? false;
-    const spawned = spawnWorkerProcess(confinement, { ambientNetwork: ambient });
-    this.#child = spawned;
+    const isolate = spawnIsolate();
+    this.#isolate = isolate;
     if (this.#dead) {
       // close() landed while the specifier was being read.
-      spawned.child.kill("SIGKILL");
+      void isolate.stop();
       throw this.#dead;
     }
 
-    // Do not hand untrusted code to a process whose sandbox is unconfirmed.
-    await spawned.confined;
-
-    const rpc = new Rpc(childPort(spawned.child));
+    const rpc = new Rpc(threadPort(isolate));
     this.#rpc = rpc;
-    this.#wire(rpc, spawned);
+    this.#wire(rpc, isolate);
 
-    // The capability is offered only when the child has no network of its own.
-    // Offering both would be pointless: a worker that can dial directly has no
-    // use for a mediated dial, and the address policy would guard nothing.
-    if (!ambient) {
-      this.#disposeSocketBridge = installSocketBridge(rpc, {
-        policy: init.network?.policy,
-        maxConcurrent: init.network?.maxConcurrent,
-      });
+    // Only what was granted gets a host half. An installed handler for a
+    // capability the guest does not have would be dead code the guest cannot
+    // reach — but it would also be a handler waiting for a method name, and
+    // the point of this design is that there is nothing to wait for.
+    if (capabilities.fetch) {
+      this.#disposers.push(
+        installFetchBridge(rpc, {
+          policy: init.network?.policy,
+          fetchImpl: init.network?.fetchImpl,
+        }),
+      );
+    }
+    if (capabilities.socket) {
+      this.#disposers.push(
+        installSocketBridge(rpc, {
+          policy: init.network?.policy,
+          maxConcurrent: init.network?.maxConcurrent,
+        }),
+      );
     }
 
-    // The worker receives the verified BYTES, not a path: nothing is written to
-    // disk, so the sandbox needs no grant for it and there is no window in
-    // which a third party could swap the file after verification.
     rpc.emit("init", {
       bundle,
       config: init.config,
       address: init.address,
-      capabilities: { socket: !ambient },
+      capabilities,
+      limits: init.limits,
     });
   }
 
-  #wire(rpc: Rpc, spawned: ReturnType<typeof spawnWorkerProcess>): void {
+  #wire(rpc: Rpc, isolate: SpawnedIsolate): void {
     rpc.onEvent("worker.ready", () => {
       if (this.#readySettled || this.#dead) return;
       this.#readySettled = true;
       this.#resolveReady();
     });
 
-    rpc.onEvent("worker.failed", (reason: { code?: string; message?: string } | undefined) => {
-      const err = new RpcError({
-        name: "AnonRpcWorkerError",
-        message: reason?.message ?? "worker signalled failure",
-        ...(reason?.code ? { code: reason.code } : {}),
-      });
-      this.#fail(err);
+    rpc.onEvent("worker.failed", (payload: GuestPayload) => {
+      const reason = (payload?.args ?? {}) as { code?: string; message?: string };
+      this.#fail(
+        new RpcError({
+          name: "AnonRpcWorkerError",
+          message: reason.message ?? "worker signalled failure",
+          ...(reason.code ? { code: reason.code } : {}),
+        }),
+      );
     });
 
     // §8: the worker pulls calls one at a time; the queue applies the
     // backpressure. An aborted accept withdraws the taker without consuming.
-    rpc.on("call.accept", async (_args, ctx) => {
+    rpc.on("call.accept", async (_payload: GuestPayload, ctx): Promise<GuestReply> => {
       const call = await this.#queue.take(ctx.signal);
       this.#inFlight.set(call.id, call);
-      return { id: call.id, kind: "fetch", url: call.url, requestInit: call.wire };
+      // The request BODY travels in the bytes slot, not inside the JSON.
+      const { body, ...rest } = call.wire ?? {};
+      return {
+        value: { id: call.id, kind: "fetch", url: call.url, requestInit: rest },
+        ...(body instanceof Uint8Array && body.byteLength ? { bytes: body } : {}),
+      };
     });
 
-    rpc.onEvent("call.respond", (msg: { id: number; response: AnonFetchResponse }) => {
-      const call = this.#inFlight.get(msg.id);
+    rpc.onEvent("call.respond", (payload: GuestPayload) => {
+      const r = (payload?.args ?? {}) as {
+        id?: number;
+        status?: number;
+        headers?: HeaderList;
+        url?: string;
+      };
+      const call = typeof r.id === "number" ? this.#inFlight.get(r.id) : undefined;
       if (!call) return; // response for a call that was already failed
-      this.#inFlight.delete(msg.id);
-      call.resolve(msg.response);
+      this.#inFlight.delete(r.id!);
+      call.resolve({
+        status: r.status ?? 200,
+        headers: r.headers ?? [],
+        body: payload?.bytes ?? new Uint8Array(0),
+        url: r.url,
+      });
     });
 
-    rpc.onEvent("call.fail", (msg: { id: number; error: { name: string; message: string; code?: string } }) => {
-      const call = this.#inFlight.get(msg.id);
+    rpc.onEvent("call.fail", (payload: GuestPayload) => {
+      const f = (payload?.args ?? {}) as {
+        id?: number;
+        error?: { name: string; message: string; code?: string };
+      };
+      const call = typeof f.id === "number" ? this.#inFlight.get(f.id) : undefined;
       if (!call) return;
-      this.#inFlight.delete(msg.id);
-      call.reject(new RpcError(msg.error));
+      this.#inFlight.delete(f.id!);
+      call.reject(new RpcError(f.error ?? { name: "Error", message: "worker failed the call" }));
     });
 
-    // §13: worker logs are diagnostic and untrusted. They are prefixed and
-    // routed to the host's console rather than thrown away, and never parsed.
-    rpc.onEvent("log", (msg: { level: "debug" | "info" | "warn" | "error"; args: unknown[] }) => {
-      const fn = console[msg.level] ?? console.log;
-      fn("[anon-rpc worker]", ...msg.args);
+    // §13: worker logs are diagnostic and untrusted. The prelude already
+    // flattened every argument to a string inside the isolate, so nothing
+    // structured — and nothing with a getter that would run guest code on this
+    // thread — arrives here.
+    rpc.onEvent("log", (payload: GuestPayload) => {
+      const msg = (payload?.args ?? {}) as { level?: string; args?: unknown[] };
+      const level = msg.level as "debug" | "info" | "warn" | "error";
+      const fn = console[level] ?? console.log;
+      fn("[anon-rpc worker]", ...(msg.args ?? []));
     });
 
-    spawned.child.once("exit", (code, signal) => {
-      this.#fail(
-        new Error(
-          `worker process exited unexpectedly (code ${code}, signal ${signal}): ${spawned.stderr()}`,
-        ),
-      );
+    isolate.worker.on("error", (e) =>
+      this.#fail(new Error(`isolate thread errored: ${e?.message ?? String(e)}`)),
+    );
+    isolate.worker.on("exit", (code) => {
+      // Exit code 0 after close() is the normal path; anything else means the
+      // thread died under the guest, which is a worker failure.
+      this.#fail(new Error(`isolate thread exited unexpectedly (code ${code})`));
     });
   }
 
   /**
-   * A standard `fetch`, routed through the sandboxed worker. Calls made before
+   * A standard `fetch`, routed through the isolated worker. Calls made before
    * the worker is ready are buffered in order (§8), not dropped.
    */
   async fetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
@@ -219,9 +276,9 @@ export class AnonRpcWorker {
           () => {
             // Not yet taken: withdraw it, and the worker never sees it (§8).
             if (this.#queue.remove(call)) return reject(abortError());
-            // Already taken: tell the child so it can abort the signal it
-            // handed the worker, then fail the caller regardless — an
-            // unresponsive worker must not keep the caller blocked.
+            // Already taken: tell the guest so it can abort the signal the
+            // worker holds, then fail the caller regardless — an unresponsive
+            // worker must not keep the caller blocked.
             if (this.#inFlight.delete(id)) {
               this.#rpc?.emit("call.abort", { id });
               reject(abortError());
@@ -233,13 +290,13 @@ export class AnonRpcWorker {
       this.#queue.push(call);
     });
 
-    // The child buffers response bodies before they cross the IPC channel
-    // (see worker-host.ts), so by here the body is always bytes.
-    const body = response.body as Uint8Array;
-    return new Response(body, { status: response.status, headers: response.headers });
+    return new Response(response.body as Uint8Array, {
+      status: response.status,
+      headers: response.headers,
+    });
   }
 
-  /** Fail everything in flight and release the worker process. */
+  /** Fail everything in flight and release the isolate. */
   close(): void {
     this.#fail(new Error("worker closed"));
   }
@@ -252,48 +309,53 @@ export class AnonRpcWorker {
       this.#readySettled = true;
       this.#rejectReady(err);
     }
-    this.#queue.rejectAll(err);
+    // Queued but never accepted, plus accepted but never answered. Both hold a
+    // promise the caller is awaiting, and a worker that died owes both an
+    // answer (§12) rather than silence.
+    for (const call of this.#queue.rejectAll(err)) call.reject(err);
     for (const [, call] of this.#inFlight) call.reject(err);
     this.#inFlight.clear();
-    this.#disposeSocketBridge?.();
+    for (const d of this.#disposers.splice(0)) d();
     this.#rpc?.close(err);
 
-    const child = this.#child?.child;
-    if (child && child.exitCode === null && child.signalCode === null) {
-      // The worker is untrusted and may ignore a polite request, so SIGKILL is
-      // the backstop. Landlock denies it nothing that would let it survive.
-      child.kill("SIGTERM");
-      const t = setTimeout(() => child.kill("SIGKILL"), 2000);
-      t.unref?.();
-      child.once("exit", () => clearTimeout(t));
+    // Asked politely first so the thread can free the WASM runtime — QuickJS
+    // aborts from JS_FreeRuntime if a handle is still live — then terminated
+    // regardless, because the guest is untrusted and may be mid-loop.
+    const isolate = this.#isolate;
+    if (isolate) {
+      this.#isolate = undefined;
+      try {
+        this.#rpc?.emit("shutdown", undefined);
+      } catch {
+        /* channel already gone */
+      }
+      void isolate.stop();
     }
-    // The process is gone; nothing is left to unref the IPC channel.
-    child?.unref?.();
   }
 }
 
-/** Node's IPC channel as the transport the protocol expects. */
-function childPort(child: import("node:child_process").ChildProcess): PortLike {
+/** The thread's MessagePort as the transport the protocol expects. */
+function threadPort(isolate: SpawnedIsolate): PortLike {
   return {
-    postMessage: (msg, handle) => {
-      // A dead channel is not an error worth throwing here: #fail is already
-      // on its way from the 'exit' handler with a better message.
-      if (!child.connected) return;
-      // Passing a descriptor transfers it: node closes this process's copy once
-      // it is sent, which is what makes the bridge a handoff rather than a tap.
-      child.send(msg as object, (handle ?? null) as never, (err) => void err);
+    // A terminated thread is not an error worth throwing here: #fail is
+    // already on its way from the 'exit' handler with a better message.
+    postMessage: (msg) => {
+      try {
+        isolate.worker.postMessage(msg);
+      } catch {
+        /* thread is gone */
+      }
     },
-    setOnMessage: (fn) => child.on("message", (m, handle) => fn(m, handle)),
+    setOnMessage: (fn) => isolate.worker.on("message", (m) => fn(m)),
   };
 }
 
 /**
  * Host `fetch(input, init)` → the §9 request shape.
  *
- * Bodies are buffered to a Uint8Array: Node's IPC cannot transfer a stream, so
- * a streaming request body has to be read before it crosses. This is the
- * transport limitation called out in protocol.ts, and the one thing a
- * socketpair-per-stream design would remove.
+ * Bodies are buffered to a Uint8Array. Nothing but JSON and bytes crosses into
+ * the isolate, so a streaming request body has to be read before it does; §9
+ * permits a stream but does not require one.
  */
 async function normalizeRequest(
   input: string | URL | Request,
@@ -311,7 +373,7 @@ async function normalizeRequest(
   }
   if (init?.redirect) wire.redirect = init.redirect;
 
-  // The signal is returned alongside, never inside `wire`: it is not
-  // structured-cloneable, and the child synthesises its own from call.abort.
+  // The signal is returned alongside, never inside `wire`: the guest gets one
+  // it synthesises from call.abort.
   return { url: req.url, wire, signal: init?.signal ?? undefined };
 }

@@ -269,10 +269,14 @@ export class Isolate {
 
     for (const h of fns) h.dispose();
 
-    // Keep the abort hook the prelude exported, so an inbound abort can be
-    // delivered without re-looking it up on the guest's global each time.
+    // Take the abort hook the prelude exported, then DELETE it from the guest's
+    // global. Holding the handle keeps it callable from here, while guest code
+    // can no longer see it — so a worker cannot replace it and quietly stop
+    // receiving the aborts §9 says it gets, and it does not count as one more
+    // name on the guest's global that has to be explained.
     const hook = ctx.getProp(ctx.global, "__onCallAbort");
     this.#onCallAbort = ctx.typeof(hook) === "function" ? hook : (hook.dispose(), undefined);
+    this.#evalOrThrow(`delete globalThis.__onCallAbort;`, "anon-rpc:seal");
   }
 
   /* --- entering the guest ------------------------------------------------ */

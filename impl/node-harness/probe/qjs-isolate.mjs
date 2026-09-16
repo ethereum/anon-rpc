@@ -108,7 +108,7 @@ function evalJson(iso, expr) {
   // Authority. Each one is a host decision, and this is the whole list.
   const CAPABILITIES = new Set([
     "anonRpcWorker", "console", "crypto", "setTimeout", "clearTimeout", "setInterval",
-    "clearInterval", "fetch", "__onCallAbort",
+    "clearInterval", "fetch",
   ]);
 
   const unclassified = names.filter((n) => !ECMASCRIPT.has(n) && !PURE.has(n) && !CAPABILITIES.has(n));
