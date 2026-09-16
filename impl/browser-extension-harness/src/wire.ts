@@ -75,7 +75,7 @@ export type ToOffscreen =
       t: "boot";
       address: string;
       config?: unknown;
-      sandboxUrl: string;
+      iframeUrl: string;
       /**
        * Reuse an already-booted worker for the same address+config if the
        * offscreen document still has one. False re-boots from scratch, which

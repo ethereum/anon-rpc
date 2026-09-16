@@ -54,22 +54,35 @@ const rpcProvider = {
 // it — cheaply, because the offscreen document still holds the booted worker.
 const workers = new Map<string, AnonRpcWorker>();
 
-function getWorker(address: string): AnonRpcWorker {
-  let w = workers.get(address);
+function getWorker(address: string, iframeUrl?: string): AnonRpcWorker {
+  const key = `${address}|${iframeUrl ?? ""}`;
+  let w = workers.get(key);
   if (!w) {
-    w = new AnonRpcWorker({ address, preExisting: { rpcProvider } });
-    workers.set(address, w);
+    w = new AnonRpcWorker({
+      address,
+      preExisting: { rpcProvider },
+      // Normally omitted — the harness defaults to the packaged sandbox page.
+      // The e2e sets it to check §6's same-origin requirement is enforced.
+      ...(iframeUrl ? { iframeUrl } : {}),
+    });
+    workers.set(key, w);
   }
   return w;
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
-  const m = msg as { type?: string; body?: unknown; address?: string; url?: string };
+  const m = msg as {
+    type?: string;
+    body?: unknown;
+    address?: string;
+    url?: string;
+    iframeUrl?: string;
+  };
   if (m?.type !== "anon-fetch") return;
 
   void (async () => {
     try {
-      const w = getWorker(m.address || SPECIFIER);
+      const w = getWorker(m.address || SPECIFIER, m.iframeUrl);
       await w.ready;
       const res = await w.fetch(m.url || `${ORIGIN}/rpc`, {
         method: "POST",

@@ -6,13 +6,15 @@ or application make **anonymized RPC requests** by running untrusted,
 hash-pinned anon-client code inside a sandboxed worker.
 
 Implements the [anon-rpc specification](https://ethereum.github.io/anon-rpc/spec/)
-version **0.3.0**. (The package version is kept `>=` the implemented spec
+version **0.3.1**. (The package version is kept `>=` the implemented spec
 version; a package release without a spec change bumps past it.)
 
 This is a variant of [`@anon-rpc/browser-harness`](../browser-harness), not a
-reimplementation. The isolation, the §7 capability API, §8's call discipline,
-§9 payloads, §10's KPS bridge and §11 storage are all that package's; what this
-one adds is the two things an extension changes about where it can run.
+reimplementation — it depends on it and runs it. The isolation, the §7
+capability API, §8's call discipline, §9 payloads, §10's KPS bridge and §11
+storage are all that package's. What this one adds is the two things an
+extension changes about *where* the harness can run: a DOM to hold the iframe,
+and a packaged page to load into it.
 
 ## Why an extension needs its own harness
 
@@ -34,7 +36,17 @@ your RPC provider           the whole harness
       └──── provider calls ────────┘
 ```
 
-Two arrangements there are chosen rather than incidental:
+The second change is the iframe itself. The harness normally builds it with
+`srcdoc` and an inline bootstrap script, and inside an extension that script
+never runs: a `srcdoc` frame inherits the embedder's Content Security Policy,
+MV3's is `script-src 'self'`, and MV3 **refuses to load an extension** whose
+policy tries to relax it. Since a policy can only be tightened from within a
+document, the only document an extension can give the worker is a page listed
+in `sandbox.pages`, which gets its own writable CSP. `WorkerInit.iframeUrl`
+(SPEC §5) is how the harness is pointed at it. Both halves are measured in
+`probe/csp.mjs` and `probe/relax-csp.mjs`.
+
+Two further arrangements are chosen rather than incidental:
 
 **The bundle is fetched and verified in the offscreen document**, and §4's
 provider call is proxied back out to the service worker instead. That is
@@ -103,8 +115,9 @@ name themselves.
   // cross-origin ones subject to CORS. That is the isolation working.
   "host_permissions": ["https://your-resolver.example/*"],
 
-  // What puts the worker at an opaque origin — and what the remote-code
-  // carve-out is about. Omit it and worker code runs at YOUR origin.
+  // What puts the worker at an opaque origin with its own CSP — and what the
+  // remote-code carve-out is about. This is the only CSP an extension may
+  // relax, which is why §5's iframeUrl has to point at a page listed here.
   "sandbox": { "pages": ["anon-rpc-sandbox.html"] },
 
   "content_security_policy": {
@@ -123,6 +136,10 @@ name themselves.
 - **`web_accessible_resources` is not needed.** The sandboxed page is framed by
   an extension page rather than by a web page. (Established by removing it and
   watching the e2e still pass, not by reading.)
+- **`iframeUrl` must stay same-origin.** §6 requires the harness to reject a
+  cross-origin one, since it would let a third party choose what runs in the
+  frame meant to contain the worker. Pass an extension-relative path; the
+  harness resolves it against the extension's own origin.
 
 A match pattern's host **may not carry a port** — `http://127.0.0.1:8545/*` is
 invalid, and Chrome's response is to warn and drop the permission, after which

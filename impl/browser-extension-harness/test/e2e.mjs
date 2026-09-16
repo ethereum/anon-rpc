@@ -422,6 +422,26 @@ if (env.noCors !== "blocked") {
 }
 ok("worker CANNOT reach the same no-CORS endpoint — it has none of the extension's host permissions");
 
+/* --- §6: a cross-origin iframeUrl is refused ----------------------------- */
+
+// `iframeUrl` says where the null-origin document comes from. A cross-origin
+// one would let a third party choose what runs in the frame that is supposed
+// to CONTAIN the worker, and receive the capability port — so §6 requires the
+// harness to reject it rather than trust the host to get it right.
+const evilPage = await context.newPage();
+await evilPage.goto(
+  `chrome-extension://${extensionId}/page.html?iframeUrl=${encodeURIComponent(`${ORIGIN}/evil.html`)}`,
+);
+await evilPage
+  .waitForFunction(() => document.getElementById("out")?.textContent !== "pending", { timeout: 30_000 })
+  .catch(() => {});
+const evil = JSON.parse(await evilPage.textContent("#out"));
+if (evil.ok) await fail("a cross-origin iframeUrl was accepted");
+if (!/same-origin/i.test(evil.error ?? "")) {
+  await fail(`cross-origin iframeUrl failed for the wrong reason: ${evil.error}`);
+}
+ok(`cross-origin iframeUrl refused (§6): ${evil.error.slice(0, 72)}…`);
+
 const fatal = consoleErrors.filter((t) => !/favicon|net::ERR_FILE_NOT_FOUND/i.test(t));
 if (fatal.length) await fail(`console errors:\n${fatal.join("\n")}`);
 ok("no console errors (CSP violations would appear here)");

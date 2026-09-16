@@ -138,8 +138,12 @@ function serve(port: RuntimePort, cache: Map<string, Entry>, idleMs: number): vo
     switch (msg?.t) {
       case "boot": {
         // A distinct config is a distinct worker: §7.1 fixes config for the
-        // worker's lifetime, so two configs cannot share one.
-        key = `${msg.address.toLowerCase()}::${stableStringify(msg.config)}`;
+        // worker's lifetime, so two configs cannot share one. iframeUrl is in
+        // the key for the same reason — it is part of how the worker was
+        // constructed, and leaving it out meant a caller asking for a
+        // different isolation document silently got a worker built with the
+        // previous one.
+        key = `${msg.address.toLowerCase()}::${msg.iframeUrl}::${stableStringify(msg.config)}`;
         const hit = msg.reuse ? cache.get(key) : undefined;
         if (hit) {
           clearTimeout(hit.reaper);
@@ -152,7 +156,7 @@ function serve(port: RuntimePort, cache: Map<string, Entry>, idleMs: number): vo
             address: msg.address,
             config: msg.config,
             preExisting: { rpcProvider: provider },
-            isolation: { sandboxUrl: msg.sandboxUrl },
+            iframeUrl: msg.iframeUrl,
           });
           entry = { worker, refs: 1, ready: worker.ready };
           cache.set(key, entry);

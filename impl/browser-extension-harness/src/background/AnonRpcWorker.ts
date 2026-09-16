@@ -33,7 +33,7 @@ import {
 
 /** Default packaged paths; override if you copied the assets elsewhere. */
 export const DEFAULT_OFFSCREEN_URL = "anon-rpc-offscreen.html";
-export const DEFAULT_SANDBOX_URL = "anon-rpc-sandbox.html";
+export const DEFAULT_IFRAME_URL = "anon-rpc-sandbox.html";
 
 export type ExtensionWorkerInit = WorkerInit & {
   /**
@@ -45,16 +45,17 @@ export type ExtensionWorkerInit = WorkerInit & {
    */
   offscreenUrl?: string | false;
   /**
-   * The packaged sandboxed page that hosts the worker (§6).
+   * The packaged page that hosts the worker — §5's `iframeUrl`, as an
+   * extension-relative path.
    *
-   * It MUST be listed in the manifest's `sandbox.pages`. That is what puts it
-   * at an opaque origin with its own CSP; without it the page would load at the
-   * extension's origin, where worker code would inherit the extension's host
-   * permissions. The harness also sets the iframe's `sandbox` attribute, so a
-   * missing manifest entry degrades to "null origin but no eval" rather than to
-   * "worker code with your permissions" — but do not rely on that.
+   * It MUST be listed in the manifest's `sandbox.pages`. That is what gives it
+   * its own Content Security Policy, which is the only relaxable one an
+   * extension has and the only way the worker's `blob:` chain can run at all.
+   * The harness also applies the iframe's `sandbox` attribute regardless (§6),
+   * so a missing manifest entry degrades to "opaque origin but no eval" rather
+   * than to "worker code with your permissions" — but do not rely on that.
    */
-  sandboxUrl?: string;
+  iframeUrl?: string;
   /**
    * Reuse a worker the offscreen document already booted for this
    * address+config. On by default, and the main reason this survives MV3's
@@ -122,7 +123,7 @@ export class AnonRpcWorker {
       t: "boot",
       address: init.address,
       config: init.config,
-      sandboxUrl: chrome.runtime.getURL(init.sandboxUrl ?? DEFAULT_SANDBOX_URL),
+      iframeUrl: resolveIframeUrl(init.iframeUrl ?? DEFAULT_IFRAME_URL),
       reuse: init.reuse ?? true,
     });
     for (const queued of this.#outbox.splice(0)) this.#send(queued);
@@ -271,6 +272,21 @@ export class AnonRpcWorker {
     }
     this.#calls.clear();
   }
+}
+
+/**
+ * An extension-relative path becomes an extension URL; an absolute URL is
+ * passed through untouched.
+ *
+ * The pass-through matters. `chrome.runtime.getURL` does not reject an absolute
+ * URL, it rewrites it into an extension one — so a caller who passed a
+ * cross-origin page would have their mistake silently turned into a
+ * same-origin-looking URL, and §6's same-origin check downstream would see
+ * nothing wrong. Handing the original through keeps that one check meaningful.
+ */
+function resolveIframeUrl(raw: string): string {
+  if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) return raw;
+  return chromeApi().runtime.getURL(raw);
 }
 
 function rehydrate(e: { name: string; message: string; code?: string }): Error {

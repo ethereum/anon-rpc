@@ -11,10 +11,13 @@ async function go(): Promise<void> {
   try {
     // The specifier under test comes from the URL, so the e2e can point the
     // same page at a different worker without a second extension.
-    const address = new URLSearchParams(location.search).get("address") ?? undefined;
+    const q = new URLSearchParams(location.search);
+    const address = q.get("address") ?? undefined;
+    const iframeUrl = q.get("iframeUrl") ?? undefined;
     const res = await chrome.runtime.sendMessage({
       type: "anon-fetch",
       address,
+      iframeUrl,
       body: { jsonrpc: "2.0", id: 1, method: "eth_blockNumber", params: [] },
     });
     out.textContent = JSON.stringify(res);
