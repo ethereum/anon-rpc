@@ -1,0 +1,12 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>anon-rpc extension example</title>
+<!--
+  An ordinary extension page, standing in for a wallet's popup. It holds no
+  anon-rpc logic at all: it asks the service worker, which owns the harness.
+  The e2e drives this page because a service worker has no UI to drive.
+-->
+<h1>anon-rpc extension example</h1>
+<button id="go">eth_blockNumber through the worker</button>
+<pre id="out">idle</pre>
+<script type="module" src="page.js"></script>

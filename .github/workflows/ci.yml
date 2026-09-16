@@ -44,13 +44,17 @@ jobs:
 
       - run: npm run typecheck
 
-      # Chromium first: both the site smoke test (inside `npm test`) and the
-      # harness e2e drive it.
+      # Chromium first: the site smoke test, the harness e2e and the browser-
+      # extension e2e all drive it. That last one needs the FULL chromium build
+      # rather than playwright's default chromium-headless-shell, which has no
+      # extension support — installing "chromium" brings both.
       - run: npx playwright install --with-deps chromium
 
       # Workspace tests: browser-harness unit suite (node --test), the
-      # specifier suite (dotenv + github-resolver + forge + anvil publish),
-      # and the site smoke test (built demo bundle driven against anvil).
+      # browser-extension e2e (a real unpacked MV3 extension in Chromium), the
+      # node-harness e2e (a QuickJS isolate on a worker thread), the specifier
+      # suite (dotenv + github-resolver + forge + anvil publish), and the site
+      # smoke test (built demo bundle driven against anvil).
       - run: npm test
 
       # Browser e2e: builds all workspaces, boots the in-process kps echo

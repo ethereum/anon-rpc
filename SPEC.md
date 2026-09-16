@@ -1,8 +1,8 @@
 # anon-rpc Specification
 
 - **Status:** Draft
-- **Version:** 0.3.0
-- **Date:** 2026-07-27
+- **Version:** 0.3.1
+- **Date:** 2026-09-16
 
 This document is the normative specification for **anon-rpc**, a standard that lets a wallet or application make anonymized RPC requests by running untrusted, hash-pinned client code inside a sandboxed worker, and granting that code a small, explicit, transport-neutral capability API.
 
@@ -167,6 +167,11 @@ export type WorkerInit = {
   // harness; its meaning is defined by the worker.
   config?: unknown;
 
+  // Where a browser harness loads its null-origin document from, for an
+  // embedder whose Content Security Policy will not let the harness construct
+  // one inline (§6). A harness that does not use an iframe MUST ignore it.
+  iframeUrl?: string;
+
   preExisting?: {
     // An ethereum rpc provider used to break the circular dependency: we need
     // to read the chain in order to instantiate our anonymous system for reading
@@ -193,6 +198,16 @@ A conforming harness MUST run the worker such that it has no ambient access to:
 - the origin or identity of the host beyond what the host passes in calls.
 
 A browser harness MUST run the worker in a Web Worker whose owning context is a null-origin (sandboxed, `allow-scripts` only) iframe, and MUST mediate all capability traffic across the `postMessage` boundary.
+
+How that iframe is constructed is the harness's choice. Building it inline — `srcdoc` carrying a bootstrap script — asks nothing of the host and is the usual way. It is not always available: a `srcdoc` document is loaded from a local scheme and therefore inherits the embedder's Content Security Policy, and a policy can only be tightened from within a document, never relaxed. An embedder whose policy omits `'unsafe-inline'` — an MV3 browser extension, or any site with a strict `script-src` — cannot run such a bootstrap at all.
+
+`WorkerInit.iframeUrl` (§5) serves those embedders. When it is present, a browser harness MUST load the null-origin document from that URL instead of constructing one, and:
+
+- it MUST still apply the `sandbox="allow-scripts"` attribute, so that a document not otherwise served at an opaque origin is placed at one regardless;
+- it MUST reject a URL that is not same-origin with the host document. A cross-origin bootstrap would put the isolation boundary in a third party's hands;
+- the document at that URL MUST run the bootstrap the harness expects. What that bootstrap is is harness-defined; a harness SHOULD publish it as a file the host can serve unmodified, so that the two cannot drift.
+
+`iframeUrl` grants the worker nothing. It says where the empty room comes from, not what is in it. A harness MUST NOT treat a document loaded this way as more trusted than one it constructed, and MUST deliver the bundle, the config and the capability port identically in both cases.
 
 ## 7. The capability API
 

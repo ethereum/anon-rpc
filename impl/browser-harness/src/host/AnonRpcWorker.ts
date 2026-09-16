@@ -94,7 +94,13 @@ export class AnonRpcWorker {
     const iframe = document.createElement("iframe");
     iframe.setAttribute("sandbox", "allow-scripts"); // §6: null origin, scripts only
     iframe.style.display = "none";
-    iframe.srcdoc = `<!doctype html><meta charset="utf-8"><script>${__IFRAME_BOOT_SRC__}</script>`;
+    // §5/§6 `iframeUrl`: a host whose CSP forbids inline script supplies the
+    // document, because a `srcdoc` frame inherits that CSP and the bootstrap
+    // below would simply not execute. Either path ends at an opaque origin
+    // running the same iframe-boot code — the sandbox attribute above is
+    // applied regardless, as §6 requires.
+    if (this.#init.iframeUrl) iframe.src = sameOriginIframeUrl(this.#init.iframeUrl);
+    else iframe.srcdoc = `<!doctype html><meta charset="utf-8"><script>${__IFRAME_BOOT_SRC__}</script>`;
     this.#iframe = iframe;
 
     const ready = new Promise<void>((resolve) => {
@@ -266,6 +272,30 @@ export class AnonRpcWorker {
     this.#iframe?.remove();
     this.#fail(new Error("worker closed"));
   }
+}
+
+/**
+ * §6: `iframeUrl` MUST be same-origin with the host document.
+ *
+ * A cross-origin bootstrap would put the isolation boundary in a third party's
+ * hands — they would choose what runs in the frame that is supposed to contain
+ * the worker, and receive the capability port. Resolved against the host's own
+ * URL first, so a relative path is the normal way to write it.
+ */
+function sameOriginIframeUrl(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw, location.href);
+  } catch {
+    throw new Error(`iframeUrl is not a valid URL: ${raw}`);
+  }
+  if (url.origin !== location.origin) {
+    throw new Error(
+      `iframeUrl must be same-origin with the host (${location.origin}), got ${url.origin} — ` +
+        "a cross-origin bootstrap would control the isolation boundary (§6)",
+    );
+  }
+  return url.href;
 }
 
 function renderLogArg(a: unknown): unknown {

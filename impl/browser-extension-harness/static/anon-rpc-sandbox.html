@@ -1,0 +1,18 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>anon-rpc sandbox</title>
+<!--
+  The §6 isolation boundary, as an MV3 extension has to build it.
+
+  This page MUST be listed in the manifest's `sandbox.pages`. That is what
+  serves it at an opaque origin with its own Content Security Policy — which is
+  both what isolates worker code from the extension, and what makes running a
+  remotely-fetched bundle permissible at all: Chrome's ban on remotely hosted
+  code carves out sandboxed iframes explicitly.
+
+  There is nothing in this page but the boot script, and the boot script is the
+  browser harness's own — the same code it inlines into `srcdoc` on an ordinary
+  web page. It spawns the Web Worker and relays the capability port; it never
+  holds the bundle, the config, or anything else the host does not hand it.
+-->
+<script src="anon-rpc-sandbox.js"></script>

@@ -2,6 +2,10 @@
 
 Changes to [SPEC.md](SPEC.md) by specification version.
 
+## 0.3.1 — 2026-09-16
+
+- §5, §6: `WorkerInit.iframeUrl` — a host can tell a browser harness where to load the null-origin document from, instead of the harness constructing one inline. A `srcdoc` frame inherits the embedder's Content Security Policy and a policy can only be tightened from within a document, so an embedder whose policy omits `'unsafe-inline'` — an MV3 browser extension, or any site with a strict `script-src` — could not run the inline bootstrap at all. §6 requires the `sandbox` attribute regardless, requires same-origin, and states that the field grants the worker nothing. Additive: harnesses that do not use an iframe ignore it, and hosts that do not set it are unaffected.
+
 ## 0.3.0 — 2026-07-27
 
 - §5, §7: `signalFailed(reason?)` — a worker can report that it cannot become ready (or has unrecoverably failed); `ready` rejection semantics specified (integrity failure, uncaught worker error, `signalFailed`), and a failed worker fails all pending and future calls. Breaking for harness implementers: `AnonRpcWorkerApi` gains a required method.

@@ -1,0 +1,64 @@
+{
+  "name": "@anon-rpc/browser-extension-harness",
+  "version": "0.3.1",
+  "description": "anon-rpc harness for MV3 browser extensions: runs a hash-pinned anon-client worker in a null-origin sandboxed page inside an offscreen document, and exposes an anonymized fetch from the service worker.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ethereum/anon-rpc.git",
+    "directory": "impl/browser-extension-harness"
+  },
+  "homepage": "https://github.com/ethereum/anon-rpc",
+  "keywords": [
+    "anon-rpc",
+    "ethereum",
+    "privacy",
+    "browser-extension",
+    "manifest-v3",
+    "offscreen",
+    "wallet"
+  ],
+  "main": "./dist/background.js",
+  "types": "./dist/types/background/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/background/index.d.ts",
+      "default": "./dist/background.js"
+    },
+    "./offscreen": {
+      "types": "./dist/types/offscreen/index.d.ts",
+      "default": "./dist/offscreen.js"
+    },
+    "./static/*": "./dist/static/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/background.js",
+    "dist/background.js.map",
+    "dist/offscreen.js",
+    "dist/offscreen.js.map",
+    "dist/static",
+    "dist/types",
+    "src"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "node build.mjs && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "node check-spec-version.mjs && node test/run.mjs",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+  },
+  "dependencies": {
+    "@anon-rpc/browser-harness": "^0.3.1",
+    "@noble/hashes": "^1.8.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.0",
+    "playwright": "^1.48.0",
+    "typescript": "^5.6.0"
+  }
+}

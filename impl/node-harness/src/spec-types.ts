@@ -15,6 +15,10 @@ export type WorkerInit = {
   // Delivered to the worker as `anonRpcWorker.config` (§7.1). Structured-
   // cloneable; opaque to the harness — its schema is defined by the worker.
   config?: unknown;
+  // Where a browser harness loads its null-origin document from, for an
+  // embedder whose CSP will not let the harness construct one inline (§6).
+  // A harness that does not use an iframe MUST ignore it.
+  iframeUrl?: string;
   preExisting?: {
     rpcProvider?: RpcProvider;
   };

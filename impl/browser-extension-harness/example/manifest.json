@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "anon-rpc example",
+  "version": "0.0.1",
+  "description": "Minimal MV3 extension that answers RPC through a hash-pinned anon-rpc worker.",
+
+  "background": { "service_worker": "background.js", "type": "module" },
+
+  "//permissions": "offscreen is what lets the extension have a DOM at all. A service worker cannot hold the sandboxed iframe that §6 isolation is built from.",
+  "permissions": ["offscreen"],
+
+  "//host_permissions": "For the OFFSCREEN document's fetch of the worker bundle, which is hash-verified (§4). The worker's own fetches do NOT use these — it runs at a null origin, so its requests are ordinary cross-origin ones subject to CORS. The e2e proves both halves: it serves the bundle from an endpoint with no CORS headers (the offscreen document gets it) and then has the worker try one (it cannot).",
+  "host_permissions": ["http://127.0.0.1/*"],
+
+  "//sandbox": "Serves this page at an opaque origin with its own CSP. It is what isolates worker code from the extension, AND what makes running a remotely-fetched bundle permissible at all: Chrome's ban on remotely hosted code carves out sandboxed iframes explicitly.",
+  "sandbox": { "pages": ["anon-rpc-sandbox.html"] },
+
+  "content_security_policy": {
+    "//sandbox": "Every token is load-bearing. allow-scripts: the boot script. blob: in script-src: the worker runtime AND the worker bundle are both importScripts'd from blob URLs, and importScripts is checked against script-src — omit it and the bundle fails to load with a bare 'failed to load'. blob: in child-src/worker-src: the Web Worker itself is spawned from one. connect-src *: reaching an RPC endpoint is the worker's entire job.",
+    "sandbox": "sandbox allow-scripts; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; child-src 'self' blob:; worker-src 'self' blob:; connect-src *;"
+  },
+
+  "//web_accessible_resources": "Deliberately absent. The sandboxed page is framed by an extension page rather than by a web page, so it needs no declaration — established by removing it and watching the e2e still pass."
+}

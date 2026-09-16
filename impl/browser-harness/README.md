@@ -5,7 +5,7 @@ A browser harness for [anon-rpc](https://github.com/ethereum/anon-rpc)
 by running untrusted, hash-pinned anon-client code inside a sandboxed worker.
 
 Implements the [anon-rpc specification](https://ethereum.github.io/anon-rpc/spec/)
-version **0.3.0**. (The package version is kept `>=` the implemented spec
+version **0.3.1**. (The package version is kept `>=` the implemented spec
 version; a package release without a spec change bumps past it.)
 
 The harness:
@@ -57,6 +57,39 @@ const res = await worker.fetch("https://rpc.example/", {
 
 worker.close(); // tears down the iframe and worker
 ```
+
+### Strict Content Security Policies
+
+By default the harness builds its null-origin iframe with `srcdoc` and an inline
+bootstrap script, which needs nothing from you. If your page's CSP omits
+`'unsafe-inline'` for `script-src`, that bootstrap will not run — a `srcdoc`
+document inherits the embedder's policy, and a policy can only be tightened
+from within a document, never relaxed. The symptom is a `ready` that never
+settles, plus a CSP violation in the console.
+
+Serve the harness's bootstrap page yourself and point `iframeUrl` (SPEC §5) at
+it:
+
+```ts
+new AnonRpcWorker({ address, preExisting, iframeUrl: "/anon-rpc-iframe.html" });
+```
+
+The page needs only the harness's own bootstrap script, which ships in this
+package as `dist/iframe-boot.js`:
+
+```html
+<!doctype html><meta charset="utf-8"><script src="/anon-rpc-iframe.js"></script>
+```
+
+The harness still applies `sandbox="allow-scripts"` itself, so the document is
+placed at an opaque origin whichever route it came from, and §6 requires the URL
+to be same-origin with your page — a cross-origin bootstrap would hand the
+isolation boundary to a third party, so the harness rejects one.
+
+For MV3 browser extensions this is not optional and the page must additionally
+be declared in the manifest's `sandbox.pages`;
+[`@anon-rpc/browser-extension-harness`](../browser-extension-harness) packages
+all of that.
 
 ## Notes
 
