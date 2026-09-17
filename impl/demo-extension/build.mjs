@@ -9,9 +9,9 @@
 // install step that package's README describes.
 
 import { build } from "esbuild";
-import { copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, copyFile, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { dirname, resolve } from "node:path";
+import { dirname, relative, resolve, sep } from "node:path";
 import JSON5 from "json5";
 
 const require = createRequire(import.meta.url);
@@ -29,16 +29,18 @@ const harnessStatic = resolve(
   dirname(require.resolve("@anon-rpc/browser-extension-harness/package.json")),
   "dist/static",
 );
-let assets;
 try {
-  assets = await readdir(harnessStatic);
+  await readdir(harnessStatic);
 } catch {
   throw new Error(
     `@anon-rpc/browser-extension-harness has not been built (${harnessStatic} is missing). ` +
       "Run `npm run build --workspaces` first.",
   );
 }
-for (const f of assets) await copyFile(resolve(harnessStatic, f), resolve(UNPACKED, f));
+// Recursive, and the tree is kept as-is: the assets arrive in an `anon-rpc/`
+// directory of the package's own naming, which is where the harness's default
+// offscreenUrl and iframeUrl point.
+await cp(harnessStatic, UNPACKED, { recursive: true });
 
 /* --- the demo's own code ------------------------------------------------ */
 
@@ -80,9 +82,12 @@ await writeFile(resolve(UNPACKED, "manifest.json"), JSON.stringify(shipped, null
 
 /* --- the archive -------------------------------------------------------- */
 
-// Entry order is sorted so the archive is byte-stable across builds.
+// Entry order is sorted so the archive is byte-stable across builds. The walk
+// is recursive and entry names keep their `anon-rpc/` prefix: extracting the
+// archive has to reproduce the directory the manifest and the harness defaults
+// both name.
 const { zip } = await import("./zip.mjs");
-const files = (await readdir(UNPACKED)).sort();
+const files = (await filesUnder(UNPACKED)).sort();
 const archive = zip(
   await Promise.all(files.map(async (name) => ({ name, data: await readFile(resolve(UNPACKED, name)) }))),
 );
@@ -92,3 +97,13 @@ const kb = (n) => `${(n / 1024).toFixed(1)}kb`;
 console.log(`\n  dist/unpacked/            ${files.length} files`);
 console.log(`  dist/${ZIP_NAME}  ${kb(archive.length)}\n`);
 console.log("build complete");
+
+/** Every file under `dir`, as paths relative to it and always `/`-separated. */
+async function filesUnder(dir) {
+  const out = [];
+  for (const e of await readdir(dir, { recursive: true, withFileTypes: true })) {
+    if (!e.isFile()) continue;
+    out.push(relative(dir, resolve(e.parentPath, e.name)).split(sep).join("/"));
+  }
+  return out;
+}

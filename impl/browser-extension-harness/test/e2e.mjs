@@ -372,7 +372,7 @@ ok(`worker requests carry Origin: null — the sandboxed page is at an opaque or
 const offscreenPages = context
   .backgroundPages()
   .concat(context.pages())
-  .filter((p) => p.url().includes("anon-rpc-offscreen.html"));
+  .filter((p) => p.url().includes("anon-rpc/offscreen.html"));
 ok(
   offscreenPages.length
     ? "offscreen document is visible to the driver"

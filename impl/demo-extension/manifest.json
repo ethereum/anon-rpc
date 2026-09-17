@@ -14,7 +14,7 @@
   "host_permissions": ["http://*/*", "https://*/*"],
 
   "//sandbox": "The §6 isolation boundary. Listing the page here is what serves it at an opaque origin with its own CSP — the only CSP an extension may relax, and the only way the worker's blob: chain can run.",
-  "sandbox": { "pages": ["anon-rpc-sandbox.html"] },
+  "sandbox": { "pages": ["anon-rpc/sandbox.html"] },
 
   "content_security_policy": {
     "//sandbox": "blob: in script-src is required because the worker runtime and the worker bundle are both importScripts'd from blob URLs, and importScripts is checked against script-src rather than worker-src.",

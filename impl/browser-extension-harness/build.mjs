@@ -1,16 +1,22 @@
 // Builds the package's three execution contexts plus the files an extension
 // copies into its own package:
 //
-//   dist/background.js            ESM — imported by the service worker
-//   dist/offscreen.js             ESM — imported by an offscreen document
-//   dist/static/anon-rpc-offscreen.{html,js}  — a ready-made offscreen document
-//   dist/static/anon-rpc-sandbox.{html,js}    — the §6 sandboxed page
+//   dist/background.js                   ESM — imported by the service worker
+//   dist/offscreen.js                    ESM — imported by an offscreen document
+//   dist/static/anon-rpc/offscreen.{html,js}  — a ready-made offscreen document
+//   dist/static/anon-rpc/sandbox.{html,js}    — the §6 sandboxed page
+//
+// The `dist/static` wrapper exists so the install step is `cp -r dist/static/*`
+// into an extension and the files land in an `anon-rpc/` directory of their
+// own, rather than loose among the extension's own pages. The directory name
+// is fixed here rather than chosen at copy time because the defaults in
+// AnonRpcWorker.ts point at it.
 //
 // The two library entries keep npm dependencies external so consumers dedupe
 // them. The two STATIC bundles do not: they are copied into an extension
 // package and loaded by URL, where nothing resolves node_modules.
 //
-// anon-rpc-sandbox.js is not built here at all — it is copied verbatim from the
+// sandbox.js is not built here at all — it is copied verbatim from the
 // browser harness's own `dist/iframe-boot.js`. That is deliberate: the
 // sandboxed page must run exactly the code the harness's `srcdoc` path runs,
 // because the host half on the other side of the postMessage is identical. A
@@ -22,7 +28,9 @@ import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 
 const outdir = "dist";
-const staticOut = `${outdir}/static`;
+/** The directory an extension ends up with, name included. */
+const ASSET_DIR = "anon-rpc";
+const staticOut = `${outdir}/static/${ASSET_DIR}`;
 await rm(outdir, { recursive: true, force: true });
 await mkdir(staticOut, { recursive: true });
 
@@ -55,7 +63,7 @@ await build({
 await build({
   ...common,
   entryPoints: ["src/offscreen/document.ts"],
-  outfile: `${staticOut}/anon-rpc-offscreen.js`,
+  outfile: `${staticOut}/offscreen.js`,
 });
 
 // The sandboxed page's script, copied from the browser harness.
@@ -72,11 +80,11 @@ try {
       "Run `npm run build --workspaces` so its dist/iframe-boot.js exists.",
   );
 }
-await copyFile(bootSrc, `${staticOut}/anon-rpc-sandbox.js`);
+await copyFile(bootSrc, `${staticOut}/sandbox.js`);
 
 // The two HTML pages.
-for (const f of await readdir("static")) {
-  await copyFile(`static/${f}`, `${staticOut}/${f}`);
+for (const f of await readdir(`static/${ASSET_DIR}`)) {
+  await copyFile(`static/${ASSET_DIR}/${f}`, `${staticOut}/${f}`);
 }
 
 console.log("build complete");

@@ -13,7 +13,7 @@
   "host_permissions": ["http://127.0.0.1/*"],
 
   "//sandbox": "Serves this page at an opaque origin with its own CSP. It is what isolates worker code from the extension, AND what makes running a remotely-fetched bundle permissible at all: Chrome's ban on remotely hosted code carves out sandboxed iframes explicitly.",
-  "sandbox": { "pages": ["anon-rpc-sandbox.html"] },
+  "sandbox": { "pages": ["anon-rpc/sandbox.html"] },
 
   "content_security_policy": {
     "//sandbox": "Every token is load-bearing. allow-scripts: the boot script. blob: in script-src: the worker runtime AND the worker bundle are both importScripts'd from blob URLs, and importScripts is checked against script-src — omit it and the bundle fails to load with a bare 'failed to load'. blob: in child-src/worker-src: the Web Worker itself is spawned from one. connect-src *: reaching an RPC endpoint is the worker's entire job.",

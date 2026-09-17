@@ -32,14 +32,17 @@ and a packaged page to load into it.
 npm i @anon-rpc/browser-extension-harness
 ```
 
-Copy the packaged assets into your extension, beside your own code:
+Copy the packaged assets into your extension:
 
 ```sh
 cp -r node_modules/@anon-rpc/browser-extension-harness/dist/static/* extension/
 ```
 
-That is four files: `anon-rpc-offscreen.html` / `.js` (the offscreen document)
-and `anon-rpc-sandbox.html` / `.js` (the §6 sandboxed page).
+That gives you `extension/anon-rpc/` holding four files — `offscreen.html` /
+`.js` (the offscreen document) and `sandbox.html` / `.js` (the §6 sandboxed
+page). The directory name comes from the package, because the defaults for
+`offscreenUrl` and `iframeUrl` point at it; copy the assets somewhere else and
+you must set both.
 
 ## Manifest
 
@@ -62,7 +65,7 @@ name themselves.
   // What puts the worker at an opaque origin with its own CSP — and what the
   // remote-code carve-out is about. This is the only CSP an extension may
   // relax, which is why §5's iframeUrl has to point at a page listed here.
-  "sandbox": { "pages": ["anon-rpc-sandbox.html"] },
+  "sandbox": { "pages": ["anon-rpc/sandbox.html"] },
 
   "content_security_policy": {
     "sandbox": "sandbox allow-scripts; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; child-src 'self' blob:; worker-src 'self' blob:; connect-src *;"
@@ -148,7 +151,7 @@ service worker remotes to it:
 service worker              offscreen document            sandboxed page          Web Worker
 ──────────────              ──────────────────            ──────────────          ──────────
 AnonRpcWorker (§5)   ⟷      @anon-rpc/browser-harness  →  opaque origin      →    the bundle
-your wallet's code          §4 verify, §7–§11              anon-rpc-sandbox.html   (hash-pinned)
+your wallet's code          §4 verify, §7–§11              anon-rpc/sandbox.html   (hash-pinned)
 your RPC provider           the whole harness
       ↑                            │
       └──── provider calls ────────┘

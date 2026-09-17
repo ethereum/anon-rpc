@@ -31,9 +31,12 @@ import {
   type WireRequest,
 } from "../wire.js";
 
-/** Default packaged paths; override if you copied the assets elsewhere. */
-export const DEFAULT_OFFSCREEN_URL = "anon-rpc-offscreen.html";
-export const DEFAULT_IFRAME_URL = "anon-rpc-sandbox.html";
+/**
+ * Default packaged paths — where `cp -r dist/static/* extension/` puts the
+ * assets. Override both if you copied them somewhere else.
+ */
+export const DEFAULT_OFFSCREEN_URL = "anon-rpc/offscreen.html";
+export const DEFAULT_IFRAME_URL = "anon-rpc/sandbox.html";
 
 export type ExtensionWorkerInit = WorkerInit & {
   /**

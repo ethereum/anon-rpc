@@ -10,7 +10,7 @@ import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
+import { relative, resolve, sep } from "node:path";
 import { keccak_256 } from "@noble/hashes/sha3";
 
 const HERE = import.meta.dirname;
@@ -79,9 +79,19 @@ await new Promise((res, rej) => {
     p += 46 + nameLen + extraLen + commentLen;
   }
 
-  const onDisk = (await readdir(UNPACKED)).sort();
+  // Walked independently of the build's own walk, so a bug in that one shows
+  // up here rather than being agreed with.
+  const onDisk = (await readdir(UNPACKED, { recursive: true, withFileTypes: true }))
+    .filter((e) => e.isFile())
+    .map((e) => relative(UNPACKED, resolve(e.parentPath, e.name)).split(sep).join("/"))
+    .sort();
   if (names.sort().join(",") !== onDisk.join(",")) {
     await fail(`zip contents differ from dist/unpacked\n  zip: ${names}\n  dir: ${onDisk}`);
+  }
+  // The harness assets must arrive in their own directory, not loose among the
+  // demo's pages — the manifest and the harness defaults both name it.
+  if (!names.includes("anon-rpc/sandbox.html")) {
+    await fail("archive has no anon-rpc/sandbox.html — the harness assets did not keep their directory");
   }
   // A zip cannot be "Load unpacked"ed, so the manifest has to be at the root
   // for the directory the user extracts to be loadable.
@@ -104,7 +114,7 @@ await new Promise((res, rej) => {
   const stale = Object.keys(m).filter((k) => k.startsWith("//"));
   if (stale.length) await fail(`manifest still carries comment keys: ${stale}`);
   if (JSON.stringify(m).includes('"//')) await fail("manifest still carries nested comment keys");
-  if (!m.sandbox?.pages?.includes("anon-rpc-sandbox.html")) {
+  if (!m.sandbox?.pages?.includes("anon-rpc/sandbox.html")) {
     await fail("manifest does not declare the sandbox page — worker code would run at the extension's origin");
   }
   if (!/blob:/.test(m.content_security_policy?.sandbox ?? "")) {
