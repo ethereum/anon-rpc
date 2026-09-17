@@ -94,7 +94,7 @@ export type SpawnedWorker = {
  * host keeps its keys — the direct analogue of §6's private-key clause.
  *
  * The returned `confined` promise is the gate the caller must await before
- * handing over the worker bundle. Delivering untrusted code to a process whose
+ * handing over the worker bundle. Delivering the bundle to a process whose
  * sandbox has not been confirmed would defeat the point of having one.
  */
 export type SpawnOptions = {

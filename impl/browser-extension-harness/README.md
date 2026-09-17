@@ -2,8 +2,8 @@
 
 An MV3 browser-extension harness for
 [anon-rpc](https://github.com/ethereum/anon-rpc) — a standard that lets a wallet
-or application make **anonymized RPC requests** by running untrusted,
-hash-pinned anon-client code inside a sandboxed worker.
+or application make **anonymized RPC requests** by running hash-pinned
+anon-client code inside a sandboxed worker.
 
 Implements the [anon-rpc specification](https://ethereum.github.io/anon-rpc/spec/)
 version **0.3.1**. (The package version is kept `>=` the implemented spec
@@ -30,7 +30,7 @@ service worker remotes to it:
 service worker              offscreen document            sandboxed page          Web Worker
 ──────────────              ──────────────────            ──────────────          ──────────
 AnonRpcWorker (§5)   ⟷      @anon-rpc/browser-harness  →  opaque origin      →    the bundle
-your wallet's code          §4 verify, §7–§11              anon-rpc-sandbox.html   (untrusted)
+your wallet's code          §4 verify, §7–§11              anon-rpc-sandbox.html   (hash-pinned)
 your RPC provider           the whole harness
       ↑                            │
       └──── provider calls ────────┘

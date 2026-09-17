@@ -8,7 +8,7 @@
   from, so the harness runs here instead and the service worker remotes to it.
   This page is NOT sandboxed and NOT listed in `sandbox.pages`: it is ordinary
   extension code, and it needs `chrome.runtime` to talk to the service worker.
-  The untrusted worker is one frame further in, in anon-rpc-sandbox.html.
+  The worker is one frame further in, in anon-rpc-sandbox.html.
 
   If your extension already uses its offscreen document for something else —
   only one is allowed per extension — do not ship this file. Call

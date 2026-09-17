@@ -4,7 +4,7 @@
 - **Version:** 0.3.1
 - **Date:** 2026-09-16
 
-This document is the normative specification for **anon-rpc**, a standard that lets a wallet or application make anonymized RPC requests by running untrusted, hash-pinned client code inside a sandboxed worker, and granting that code a small, explicit, transport-neutral capability API.
+This document is the normative specification for **anon-rpc**, a standard that lets a wallet or application make anonymized RPC requests by running hash-pinned client code inside a sandboxed worker, and granting that code a small, explicit, transport-neutral capability API.
 
 Appendix A gives non-normative design rationale.
 

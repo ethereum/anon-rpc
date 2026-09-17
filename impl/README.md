@@ -20,7 +20,7 @@ worker, as two npm workspaces:
   on-chain (pins the bundle hash, verifies resolvers serve the bytes, deploys,
   reads back).
 
-The harness runs untrusted, hash-pinned worker code inside a Web Worker in a null-origin
+The harness runs hash-pinned worker code inside a Web Worker in a null-origin
 sandboxed iframe (§6), and exposes the `AnonRpcWorkerApi` capability surface
 (§7–§13) across the `postMessage` boundary — including a **real KPS transport**
 ([`@kpstreams/webrtc-client`](https://www.npmjs.com/package/@kpstreams/webrtc-client),
@@ -40,10 +40,9 @@ from the host to the worker.
                                           │    worker-runtime (harness): builds
         MessageChannel port ──────────────┼──▶  anonRpcWorker, importScripts the
         (relayed once through the iframe, │     verified bundle
-         then host↔worker direct)         │    worker bundle (untrusted,
-                                          │     hash-pinned): acceptCall loop,
-                                          │     fetch passthrough (+ kps/storage
-                                          │     in the test worker)
+         then host↔worker direct)         │    worker bundle (hash-pinned):
+                                          │     acceptCall loop, fetch passthrough
+                                          │     (+ kps/storage in the test worker)
 ```
 
 The capability port carries a small request/response + event RPC

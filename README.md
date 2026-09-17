@@ -3,7 +3,7 @@
 [![ci](https://github.com/ethereum/anon-rpc/actions/workflows/ci.yml/badge.svg)](https://github.com/ethereum/anon-rpc/actions/workflows/ci.yml)
 
 A standard that lets a wallet or application make anonymized RPC requests by
-running untrusted, hash-pinned client code inside a sandboxed worker and
+running hash-pinned client code inside a sandboxed worker and
 granting it a small, explicit, transport-neutral capability API.
 
 - [SPEC.md](SPEC.md) — the normative specification (design rationale in its
