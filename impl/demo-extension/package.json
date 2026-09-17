@@ -1,0 +1,22 @@
+{
+  "name": "anon-rpc-demo-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The anon-rpc balance-watcher demo, packaged as an MV3 browser extension. Built into an unpacked directory and the .zip the site offers for download.",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node test/run.mjs"
+  },
+  "dependencies": {
+    "@anon-rpc/browser-extension-harness": "*"
+  },
+  "devDependencies": {
+    "@noble/hashes": "^1.8.0",
+    "esbuild": "^0.28.0",
+    "json5": "^2.2.3",
+    "playwright": "^1.48.0",
+    "typescript": "^5.6.0"
+  }
+}

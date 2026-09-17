@@ -420,6 +420,106 @@ function sharedNav() {
   };
 }
 
+/** The demo, packaged as an extension: name, bytes, and where it comes from. */
+const EXTENSION_ZIP = "anon-rpc-demo-extension.zip";
+const EXTENSION_SRC = resolve(import.meta.dirname, `../demo-extension/dist/${EXTENSION_ZIP}`);
+
+/**
+ * Serves the demo extension's archive and injects the download card.
+ *
+ * The archive is built by the `demo-extension` workspace, which comes before
+ * this one in the root build. Vite is told to emit it rather than being pointed
+ * at `src/public/`: it is a build artifact, and a generated file living in a
+ * tracked directory shows up as a dirty tree after every build.
+ */
+function demoExtension() {
+  const read = () => {
+    try {
+      return readFileSync(EXTENSION_SRC);
+    } catch {
+      return undefined;
+    }
+  };
+
+  return {
+    name: "demo-extension",
+
+    buildStart() {
+      // A build that silently ships a dead download link is worse than a
+      // failed one. `vite dev` is exempt: it has no buildStart-time need for
+      // the artifact, and the middleware below explains its absence.
+      if (this.meta.watchMode) return;
+      if (!read()) {
+        throw new Error(
+          `${EXTENSION_SRC} is missing — run \`npm run build --workspaces\` so the ` +
+            "demo-extension workspace builds before the site.",
+        );
+      }
+    },
+
+    generateBundle() {
+      const source = read();
+      if (source) this.emitFile({ type: "asset", fileName: EXTENSION_ZIP, source });
+    },
+
+    configureServer(server) {
+      server.middlewares.use(`/${EXTENSION_ZIP}`, (_req, res) => {
+        const source = read();
+        if (!source) {
+          res.statusCode = 404;
+          res.end("demo-extension has not been built; run `npm run build -w anon-rpc-demo-extension`");
+          return;
+        }
+        res.setHeader("content-type", "application/zip");
+        res.end(source);
+      });
+    },
+
+    transformIndexHtml: {
+      order: "pre",
+      handler(html, ctx) {
+        if (slugOf(ctx.filename) !== "demo") return;
+        if (!html.includes("<!--EXTENSION_DOWNLOAD-->")) {
+          throw new Error(`${ctx.filename} has no <!--EXTENSION_DOWNLOAD--> slot`);
+        }
+        const bytes = read()?.length;
+        const size = bytes ? `${(bytes / 1024).toFixed(0)} KB` : "not built";
+        return html.replace("<!--EXTENSION_DOWNLOAD-->", () => renderExtensionCard(size));
+      },
+    },
+  };
+}
+
+function renderExtensionCard(size) {
+  // Deliberately explicit about the unpacked-install dance. Chrome cannot load
+  // a .zip directly and this extension is not in any store, so a download link
+  // with no instructions is a dead end for most readers.
+  return `<div class="card">
+      <h2>Run it as a browser extension</h2>
+      <p class="field-note">
+        The same demo, packaged for Chrome with
+        <a href="https://github.com/ethereum/anon-rpc/tree/main/impl/browser-extension-harness"><code>@anon-rpc/browser-extension-harness</code></a>.
+        A service worker owns the harness, an offscreen document holds the
+        null-origin sandbox, and the worker stays verified and running between
+        popup opens.
+      </p>
+      <p>
+        <a class="btn" href="../${EXTENSION_ZIP}" download>Download extension (${size})</a>
+      </p>
+      <ol class="field-note install-steps">
+        <li>Unzip it — Chrome loads a folder, not an archive.</li>
+        <li>Open <code>chrome://extensions</code> and turn on <strong>Developer mode</strong>.</li>
+        <li>Choose <strong>Load unpacked</strong> and pick the unzipped folder.</li>
+        <li>Open the extension's popup and press <strong>Start watching</strong>.</li>
+      </ol>
+      <p class="field-note">
+        Unsigned and not in the Chrome Web Store: it is a demo of the standard,
+        not a product. The source is
+        <a href="https://github.com/ethereum/anon-rpc/tree/main/impl/demo-extension">impl/demo-extension</a>.
+      </p>
+    </div>`;
+}
+
 function adoptersPage() {
   return {
     name: "inject-adopters",
@@ -456,7 +556,7 @@ function docPages() {
 export default defineConfig({
   root: "src",
   base: "./", // relative URLs: works at any Pages mount path
-  plugins: [json5Modules(), sharedNav(), docPages(), adoptersPage()],
+  plugins: [json5Modules(), sharedNav(), docPages(), adoptersPage(), demoExtension()],
   build: {
     outDir: "../dist",
     emptyOutDir: true,

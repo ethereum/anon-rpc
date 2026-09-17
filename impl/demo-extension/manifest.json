@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "anon-rpc demo — balance watcher",
+  "version": "0.0.0",
+  "description": "Watches an ETH balance, with every RPC call made by hash-pinned worker code in a sandboxed page. A demo of the anon-rpc standard.",
+
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_popup": "popup.html", "default_title": "anon-rpc demo" },
+
+  "//permissions": "offscreen gives the extension a DOM to hold the §6 iframe in; storage keeps settings across popup opens and service-worker restarts.",
+  "permissions": ["offscreen", "storage"],
+
+  "//host_permissions": "For the OFFSCREEN document's fetch of the worker bundle from whichever resolver the specifier names, and for the service worker's own bootstrap RPC call (§4). Broad because a demo lets you point it anywhere; a real wallet would list its own endpoints. The WORKER's requests do not use these — it runs at a null origin and is subject to CORS like any web page.",
+  "host_permissions": ["http://*/*", "https://*/*"],
+
+  "//sandbox": "The §6 isolation boundary. Listing the page here is what serves it at an opaque origin with its own CSP — the only CSP an extension may relax, and the only way the worker's blob: chain can run.",
+  "sandbox": { "pages": ["anon-rpc-sandbox.html"] },
+
+  "content_security_policy": {
+    "//sandbox": "blob: in script-src is required because the worker runtime and the worker bundle are both importScripts'd from blob URLs, and importScripts is checked against script-src rather than worker-src.",
+    "sandbox": "sandbox allow-scripts; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; child-src 'self' blob:; worker-src 'self' blob:; connect-src *;"
+  }
+}

@@ -54,6 +54,32 @@ for (const f of jsFiles) {
 }
 ok(`site bundles have no unresolved build-time defines (${jsFiles.length} JS file${jsFiles.length === 1 ? "" : "s"})`);
 
+// The extension download. This is a build artifact emitted by a plugin rather
+// than a file in src/public/, so nothing else would notice it going missing —
+// and the failure mode is a dead link on a published page.
+{
+  const html = await readFile(`${SITE}dist/demo/index.html`, "utf8");
+  if (html.includes("<!--EXTENSION_DOWNLOAD-->")) fail("/demo/ still contains the unreplaced EXTENSION_DOWNLOAD slot");
+  const href = html.match(/href="(\.\.\/anon-rpc-demo-extension\.zip)" download/)?.[1];
+  if (!href) fail("/demo/ has no download link for the demo extension");
+  if (!/Download extension \(\d+ KB\)/.test(html)) fail("/demo/ download link does not state the archive size");
+  // Unzipping is a step a reader will otherwise skip and then wonder why
+  // Chrome rejects the file, so the page must say so.
+  if (!/Unzip it/i.test(html)) fail("/demo/ does not tell the reader to unzip before loading");
+  if (!/chrome:\/\/extensions/.test(html)) fail("/demo/ does not say where to load it");
+
+  // The link has to resolve to a real, valid archive at that path.
+  const zip = await readFile(`${SITE}dist/anon-rpc-demo-extension.zip`).catch(() => null);
+  if (!zip) fail("the demo extension archive was not emitted into the site build");
+  if (zip.readUInt32LE(0) !== 0x04034b50) fail("emitted archive does not start with a zip local header");
+  let eocd = -1;
+  for (let i = zip.length - 22; i >= 0; i--) {
+    if (zip.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) fail("emitted archive has no end-of-central-directory record");
+  ok(`/demo/ links a valid ${(zip.length / 1024).toFixed(0)} KB extension archive with install steps`);
+}
+
 // The hosted markdown pages: repo docs rendered into the site at build time.
 const docPages = [
   ["spec", "anon-rpc Specification"],

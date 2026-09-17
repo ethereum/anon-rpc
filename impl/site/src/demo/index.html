@@ -179,6 +179,11 @@
       line-height: 1.55;
       margin-top: 24px;
     }
+    /* The extension download card's install steps: a numbered list that keeps
+       the muted field-note voice rather than becoming body copy. */
+    .install-steps { margin: 4px 0 12px; padding-left: 20px; }
+    .install-steps li { margin: 3px 0; }
+    .install-steps code, .install-steps strong { color: var(--text); }
   </style>
 </head>
 <body>
@@ -242,6 +247,8 @@
       <div id="delta"></div>
       <div id="checked"></div>
     </div>
+
+    <!--EXTENSION_DOWNLOAD-->
 
     <p class="foot-note">
       Under the hood: the bootstrap RPC is used once to read

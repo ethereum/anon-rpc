@@ -11,6 +11,7 @@
     "passthrough-worker",
     "test-worker",
     "specifier",
+    "demo-extension",
     "site"
   ],
   "scripts": {

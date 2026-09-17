@@ -51,10 +51,11 @@ jobs:
       - run: npx playwright install --with-deps chromium
 
       # Workspace tests: browser-harness unit suite (node --test), the
-      # browser-extension e2e (a real unpacked MV3 extension in Chromium), the
-      # node-harness e2e (a QuickJS isolate on a worker thread), the specifier
-      # suite (dotenv + github-resolver + forge + anvil publish), and the site
-      # smoke test (built demo bundle driven against anvil).
+      # browser-extension e2e and the demo-extension test (both load a real
+      # unpacked MV3 extension into Chromium), the node-harness e2e (a QuickJS
+      # isolate on a worker thread), the specifier suite (dotenv +
+      # github-resolver + forge + anvil publish), and the site smoke test
+      # (built demo bundle driven against anvil).
       - run: npm test
 
       # Browser e2e: builds all workspaces, boots the in-process kps echo

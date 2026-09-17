@@ -1,0 +1,59 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>anon-rpc demo</title>
+<!--
+  The popup. It holds no anon-rpc logic and never constructs a worker: it reads
+  and writes settings, asks the service worker to poll, and renders. See
+  src/background.ts for why the split is that way round.
+-->
+<link rel="stylesheet" href="popup.css" />
+<body>
+  <header>
+    <h1>anon-rpc</h1>
+    <span id="pill" class="pill">idle</span>
+  </header>
+
+  <p class="lede">
+    Watches an address's ETH balance, with every RPC call made by hash-pinned
+    worker code running in a sandboxed page inside this extension.
+  </p>
+
+  <section>
+    <label for="preset">Worker</label>
+    <select id="preset"></select>
+    <p class="note" id="preset-note"></p>
+
+    <label for="specifier">Specifier contract</label>
+    <input id="specifier" placeholder="0x…" spellcheck="false" />
+
+    <label for="config">Worker config (JSON, §7.1)</label>
+    <textarea id="config" rows="3" placeholder="{ }" spellcheck="false"></textarea>
+    <p class="note warn" id="config-note"></p>
+
+    <label for="bootstrap">Bootstrap RPC <span class="hint">reads the specifier once, not anonymized</span></label>
+    <input id="bootstrap" placeholder="https://ethereum-rpc.publicnode.com" spellcheck="false" />
+
+    <label for="worker-rpc">Worker RPC <span class="hint">reached through the worker</span></label>
+    <div class="row">
+      <input id="worker-rpc" placeholder="https://ethereum-rpc.publicnode.com" spellcheck="false" />
+      <button id="copy" type="button" class="ghost" title="Copy the bootstrap URL here">same</button>
+    </div>
+
+    <label for="watch">Watch address</label>
+    <input id="watch" placeholder="0x…" spellcheck="false" />
+
+    <button id="toggle" class="primary" type="button">Start watching</button>
+    <p class="detail" id="detail"></p>
+  </section>
+
+  <section id="balance-card" hidden>
+    <div id="balance">— <span class="unit">ETH</span></div>
+    <div id="delta"></div>
+    <div id="checked"></div>
+  </section>
+
+  <footer>
+    <span id="boot-note"></span>
+  </footer>
+  <script type="module" src="popup.js"></script>
+</body>
