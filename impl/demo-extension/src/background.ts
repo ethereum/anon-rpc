@@ -13,7 +13,7 @@
 //     So the booted worker outlives the code that asked for it, and a reopened
 //     popup reattaches to a worker that is already verified and running.
 //
-// `coldBoots` below is how the UI can tell the difference honestly: §4's
+// `providerCalls` below is how the UI can tell the difference honestly: §4's
 // specifier read goes through the provider in THIS file, so if the provider was
 // called, the bundle was re-fetched and re-verified. If it was not, the
 // offscreen document handed back the worker it already had.
@@ -49,19 +49,38 @@ type Runtime = {
   bootMs?: number;
   cold?: boolean;
   lastBalance?: string; // decimal string: bigint is not JSON
-  error?: string;
 };
 
-const SETTINGS_KEY = "settings";
+/**
+ * Two stores, because "what the user typed" and "what is known to work" are
+ * different things.
+ *
+ * `local` is the durable prefill for the next popup, and an RPC URL only
+ * reaches it once it has actually served — a bootstrap URL when a worker boots
+ * through it, a worker URL when a balance query comes back. Saving them on
+ * `start` instead would make a typo the sticky default, which is precisely the
+ * state that is most annoying to get out of.
+ *
+ * `session` holds the settings currently in use, so `poll` can find the
+ * unproven URLs it is mid-way through proving, and so a reopened popup shows
+ * what is actually running rather than the last thing that worked.
+ */
+const SAVED_KEY = "settings";
+const ACTIVE_KEY = "active";
 const RUNTIME_KEY = "runtime";
 
-/** Settings live across browser restarts; runtime state only for the session. */
-const loadSettings = async (): Promise<Partial<Settings>> =>
-  ((await chrome.storage.local.get(SETTINGS_KEY))[SETTINGS_KEY] as Partial<Settings>) ?? {};
-const saveSettings = (s: Settings) => chrome.storage.local.set({ [SETTINGS_KEY]: s });
+const loadSaved = async (): Promise<Partial<Settings>> =>
+  ((await chrome.storage.local.get(SAVED_KEY))[SAVED_KEY] as Partial<Settings>) ?? {};
+const mergeSaved = async (patch: Partial<Settings>): Promise<void> =>
+  chrome.storage.local.set({ [SAVED_KEY]: { ...(await loadSaved()), ...patch } });
+
+const loadActive = async (): Promise<Partial<Settings>> =>
+  ((await chrome.storage.session.get(ACTIVE_KEY))[ACTIVE_KEY] as Partial<Settings>) ?? {};
+const saveActive = (s: Settings): Promise<void> => chrome.storage.session.set({ [ACTIVE_KEY]: s });
+
 const loadRuntime = async (): Promise<Runtime> =>
   ((await chrome.storage.session.get(RUNTIME_KEY))[RUNTIME_KEY] as Runtime) ?? { running: false };
-const saveRuntime = (r: Runtime) => chrome.storage.session.set({ [RUNTIME_KEY]: r });
+const saveRuntime = (r: Runtime): Promise<void> => chrome.storage.session.set({ [RUNTIME_KEY]: r });
 
 /** Per-incarnation. A new service worker starts with nothing here. */
 let worker: AnonRpcWorker | undefined;
@@ -117,6 +136,8 @@ async function ensureWorker(s: Settings): Promise<{ worker: AnonRpcWorker; bootM
 
   worker = w;
   workerKey = key;
+  // A worker booted through this bootstrap URL: it has earned persistence.
+  await mergeSaved({ bootstrap: s.bootstrap });
   // §4's specifier read goes through the provider above. If it never fired,
   // nothing was re-read, re-fetched or re-verified — the offscreen document
   // returned a worker it already had booted.
@@ -150,34 +171,67 @@ function validate(s: Partial<Settings>): Settings {
 
 type Request =
   | { type: "status" }
+  /** Remember the fields that are not RPC URLs, as typed. */
+  | { type: "save"; settings: Partial<Settings> }
   | { type: "start"; settings: Settings }
   | { type: "poll" }
   | { type: "stop" };
 
+/**
+ * The fields that persist as typed. The two RPC URLs are deliberately absent:
+ * they persist only once they have served (see the store comment above).
+ */
+const TYPED_FIELDS = ["specifier", "config", "watch", "preset"] as const;
+
+function typedOnly(s: Partial<Settings>): Partial<Settings> {
+  const out: Partial<Settings> = {};
+  for (const f of TYPED_FIELDS) if (s[f] !== undefined) out[f] = s[f];
+  return out;
+}
+
 async function handle(req: Request): Promise<unknown> {
   switch (req.type) {
-    case "status":
-      return { ok: true, settings: await loadSettings(), runtime: await loadRuntime() };
+    case "status": {
+      const [saved, active, runtime] = await Promise.all([loadSaved(), loadActive(), loadRuntime()]);
+      // What is running wins over what last worked: a reopened popup should
+      // show the configuration in force, not a stale prefill.
+      return { ok: true, settings: runtime.running ? { ...saved, ...active } : saved, runtime };
+    }
+
+    case "save":
+      await mergeSaved(typedOnly(req.settings));
+      return { ok: true };
 
     case "start": {
       const s = validate(req.settings);
-      await saveSettings(s);
+      await mergeSaved(typedOnly(s));
+      await saveActive(s);
       await saveRuntime({ running: true });
-      const { bootMs, cold } = await ensureWorker(s);
-      const runtime: Runtime = { running: true, bootMs, cold };
-      await saveRuntime(runtime);
-      return { ok: true, runtime };
+      try {
+        const { bootMs, cold } = await ensureWorker(s);
+        const runtime: Runtime = { running: true, bootMs, cold };
+        await saveRuntime(runtime);
+        return { ok: true, runtime };
+      } catch (e) {
+        // A start that failed must not leave the session marked as running:
+        // the next popup would read that and resume polling a worker which
+        // never booted, reporting RPC errors forever.
+        await saveRuntime({ running: false });
+        throw e;
+      }
     }
 
     case "poll": {
       const rt = await loadRuntime();
       if (!rt.running) return { ok: false, error: "not running" };
-      const s = validate(await loadSettings());
+      const s = validate(await loadActive());
       const t0 = Date.now();
       const { worker: w, bootMs, cold } = await ensureWorker(s);
       const call = jsonRpc(w.fetch, s.workerRpc);
       const result = (await call("eth_getBalance", [s.watch, "latest"])) as string;
       const wei = BigInt(result).toString();
+      // The worker RPC answered a real query: it has earned persistence.
+      await mergeSaved({ workerRpc: s.workerRpc });
       const runtime: Runtime = {
         running: true,
         lastBalance: wei,

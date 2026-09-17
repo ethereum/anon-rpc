@@ -15,6 +15,17 @@ declare const chrome: {
 const POLL_MS = 12_000; // ~mainnet block time
 const DEFAULT_WATCH = "0x00000000219ab540356cBB839Cbe05303d7705Fa"; // beacon deposit contract
 
+// Probed in order on first use to prefill the RPC fields, same list and same
+// order as the web demo. All mainnet; the web demo also needs them CORS-open,
+// which this does not — the popup fetches under the extension's host
+// permissions. Availability shifts, hence a probe rather than a hardcoded one.
+const PUBLIC_RPCS = [
+  "https://ethereum-rpc.publicnode.com",
+  "https://eth.drpc.org",
+  "https://1rpc.io/eth",
+  "https://cloudflare-eth.com",
+];
+
 type Settings = {
   bootstrap: string;
   workerRpc: string;
@@ -49,6 +60,63 @@ const fields = ["bootstrap", "workerRpc", "specifier", "config", "watch"] as con
 
 const send = <T>(msg: unknown): Promise<T> => chrome.runtime.sendMessage(msg) as Promise<T>;
 
+/**
+ * Remember the typed fields, coalesced.
+ *
+ * The web demo writes to localStorage synchronously on every keystroke; this
+ * has to cross to the service worker, so it waits for a pause instead. The two
+ * RPC URLs are not sent at all — the service worker persists those only once
+ * they have served.
+ */
+let saveTimer: number | undefined;
+function saveTyped(): void {
+  if (saveTimer !== undefined) clearTimeout(saveTimer);
+  saveTimer = window.setTimeout(() => {
+    void send({
+      type: "save",
+      settings: {
+        specifier: els.specifier.value.trim(),
+        config: els.config.value,
+        watch: els.watch.value.trim(),
+        preset: els.preset.value,
+      },
+    });
+  }, 300);
+}
+
+/**
+ * Fill the RPC fields from the first public endpoint that answers as mainnet.
+ *
+ * Only ever runs when nothing is saved, and never overwrites a field the user
+ * has already typed into — the probe is slower than a person is, so it can
+ * finish after they have started.
+ */
+async function prefillRpcs(): Promise<void> {
+  const restore = els.bootstrap.placeholder;
+  els.bootstrap.placeholder = "checking public RPCs…";
+  try {
+    for (const url of PUBLIC_RPCS) {
+      try {
+        const resp = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}',
+          signal: AbortSignal.timeout(4000),
+        });
+        const body = (await resp.json()) as { result?: string };
+        if (body.result !== "0x1") continue;
+        if (!els.bootstrap.value) els.bootstrap.value = url;
+        if (!els.workerRpc.value) els.workerRpc.value = url;
+        return;
+      } catch {
+        // endpoint down, slow, or not answering as mainnet: try the next
+      }
+    }
+  } finally {
+    els.bootstrap.placeholder = restore;
+  }
+}
+
 /* --- presets ------------------------------------------------------------ */
 
 const CUSTOM = PRESETS[PRESETS.length - 1];
@@ -74,6 +142,7 @@ function applyPreset(p: Preset): void {
   // previous one's config behind for this one to be started with.
   els.config.value = p.config;
   renderPreset(p);
+  saveTyped();
 }
 
 /* --- status ------------------------------------------------------------- */
@@ -195,12 +264,16 @@ els.copy.addEventListener("click", () => {
   els.workerRpc.value = els.bootstrap.value;
 });
 els.specifier.addEventListener("input", () => {
+  // Hand-editing away from a preset's address is a switch to custom.
   const match = presetBySpecifier(els.specifier.value.trim()) ?? CUSTOM;
   if (match.id !== els.preset.value) {
     els.preset.value = match.id;
     renderPreset(match);
   }
+  saveTyped();
 });
+els.config.addEventListener("input", saveTyped);
+els.watch.addEventListener("input", saveTyped);
 els.preset.addEventListener("change", () => applyPreset(presetById(els.preset.value)));
 
 /* --- boot the popup ----------------------------------------------------- */
@@ -223,6 +296,10 @@ void (async () => {
   els.preset.value = initial.id;
   if (els.specifier.value) renderPreset(initial);
   else applyPreset(initial);
+
+  // Nothing proven yet: find an endpoint that works rather than leaving the
+  // two RPC fields blank for the reader to fill in by hand.
+  if (!els.bootstrap.value || !els.workerRpc.value) void prefillRpcs();
 
   if (runtime.lastBalance) {
     // Shown before the first poll of this popup so a reopen is not blank; the

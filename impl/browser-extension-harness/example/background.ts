@@ -66,6 +66,14 @@ function getWorker(address: string, iframeUrl?: string): AnonRpcWorker {
       ...(iframeUrl ? { iframeUrl } : {}),
     });
     workers.set(key, w);
+    // Failure is final for a worker (§7), so a cache that keeps one hands the
+    // same rejection to every retry — and the usual cause of a boot failure
+    // is something the caller is about to fix. Anything caching workers needs
+    // this; the harness does the same for its own offscreen cache.
+    const failed = w;
+    void failed.ready.catch(() => {
+      if (workers.get(key) === failed) workers.delete(key);
+    });
   }
   return w;
 }

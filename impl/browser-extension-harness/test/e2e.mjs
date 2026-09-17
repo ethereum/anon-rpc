@@ -68,6 +68,10 @@ const SPECIFIER = "0x4fd77be300f31c5fe6ab266d35d27750a3478d27";
 // extension's identity or its host permissions, even though the offscreen
 // document that loaded it has both.
 const SPECIFIER_PROBE = "0x000000000000000000000000000000000000beef";
+// A third specifier whose FIRST specifier read fails and whose later ones
+// succeed, for the "a failed boot must not be cached" case below.
+const SPECIFIER_FLAKY = "0x000000000000000000000000000000000000fa11";
+let flakyCalls = 0;
 
 const pad = (h) => h.replace(/^0x/, "").padStart(64, "0");
 const word = (n) => pad(n.toString(16));
@@ -182,7 +186,14 @@ const server = createServer((req, res) => {
     if (msg.method === "eth_call") {
       bootstrapCalls++;
       const data = msg.params?.[0]?.data;
-      const probe = (msg.params?.[0]?.to ?? "").toLowerCase() === SPECIFIER_PROBE.toLowerCase();
+      const to = (msg.params?.[0]?.to ?? "").toLowerCase();
+      if (to === SPECIFIER_FLAKY.toLowerCase() && flakyCalls++ < 1) {
+        res.writeHead(200, { ...cors, "content-type": "application/json" });
+        return res.end(
+          JSON.stringify({ jsonrpc: "2.0", id: msg.id, error: { message: "flaky: first call fails" } }),
+        );
+      }
+      const probe = to === SPECIFIER_PROBE.toLowerCase();
       if (data === selector("workerHash()")) return send("0x" + pad(probe ? probeHash : workerHash));
       if (data === selector("workerResolvers()")) {
         return send(encodeStringArray([`${ORIGIN}${probe ? "/probe-worker.js" : "/worker.js"}`]));
@@ -421,6 +432,38 @@ if (env.noCors !== "blocked") {
   );
 }
 ok("worker CANNOT reach the same no-CORS endpoint — it has none of the extension's host permissions");
+
+/* --- a boot that failed must not be cached ------------------------------- */
+
+// The offscreen document caches booted workers by address+config so that a
+// restarted service worker reattaches instead of re-verifying. A worker whose
+// boot FAILED must be evicted from that cache: its `ready` is already
+// rejected, so keeping it would answer every retry with the original error —
+// and the usual cause is a setting the user is about to correct, which would
+// then appear to make no difference.
+{
+  const flakyUrl = `chrome-extension://${extensionId}/page.html?address=${SPECIFIER_FLAKY}`;
+  const first = await context.newPage();
+  await first.goto(flakyUrl);
+  await first
+    .waitForFunction(() => document.getElementById("out")?.textContent !== "pending", { timeout: 30_000 })
+    .catch(() => {});
+  const failed = JSON.parse((await first.textContent("#out")) ?? "{}");
+  await first.close();
+  if (failed.ok) await fail("the flaky specifier's first boot was expected to fail");
+
+  const second = await context.newPage();
+  await second.goto(flakyUrl);
+  await second
+    .waitForFunction(() => document.getElementById("out")?.textContent !== "pending", { timeout: 60_000 })
+    .catch(() => {});
+  const retried = JSON.parse((await second.textContent("#out")) ?? "{}");
+  await second.close();
+  if (!retried.ok) {
+    await fail(`retrying after a failed boot returned the cached failure: ${retried.error}`);
+  }
+  ok("a boot that failed is evicted from the cache, so the retry is a real retry");
+}
 
 /* --- §6: a cross-origin iframeUrl is refused ----------------------------- */
 

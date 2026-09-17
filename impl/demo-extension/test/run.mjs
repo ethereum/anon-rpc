@@ -212,18 +212,104 @@ const extensionId = new URL(sw.url()).host;
 ok(`extension loaded (${extensionId})`);
 
 const errors = [];
-/** The popup, opened as a tab. A real popup is the same document. */
+
+// The first entry of the popup's PUBLIC_RPCS list. The prefill probe asks each
+// in order for eth_chainId and takes the first that answers as mainnet, so
+// answering this one makes the probe deterministic.
+const FIRST_PUBLIC_RPC = "https://ethereum-rpc.publicnode.com";
+let probeHits = 0;
+
+/**
+ * The popup, opened as a tab. A real popup is the same document.
+ *
+ * Hermetic, like the site's demo test: nothing off 127.0.0.1 is reachable.
+ * The one exception is the first public RPC the prefill probe tries, which is
+ * answered here — so the probe is exercised rather than merely tolerated, and
+ * it cannot depend on a live endpoint.
+ */
 async function openPopup() {
   const page = await context.newPage();
   page.on("console", (m) => {
     if (m.type() === "error") errors.push(m.text());
   });
   page.on("pageerror", (e) => errors.push(String(e)));
+  await page.route("**/*", (route) => {
+    const url = route.request().url();
+    if (url.startsWith(FIRST_PUBLIC_RPC)) {
+      probeHits++;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: '{"jsonrpc":"2.0","id":1,"result":"0x1"}',
+      });
+    }
+    const parsed = new URL(url);
+    // The popup's own document, script and stylesheet are chrome-extension://
+    // URLs and must obviously be allowed — blocking them loads a blank page
+    // whose every later assertion fails for the wrong reason.
+    if (parsed.protocol === "chrome-extension:") return route.continue();
+    const host = parsed.hostname;
+    return host === "127.0.0.1" || host === "localhost" ? route.continue() : route.abort();
+  });
   await page.goto(`chrome-extension://${extensionId}/popup.html`);
   return page;
 }
 
 const page = await openPopup();
+
+// Fresh profile: the watch address and both RPC fields prefill themselves,
+// exactly as the web demo does. The fields being empty is what a reader hits
+// first, so it is worth asserting rather than assuming.
+if ((await page.inputValue("#watch")) !== WATCH) {
+  await fail("watch address did not prefill with the beacon deposit contract");
+}
+await page
+  .waitForFunction(
+    (rpc) =>
+      document.querySelector("#bootstrap")?.value === rpc &&
+      document.querySelector("#worker-rpc")?.value === rpc,
+    FIRST_PUBLIC_RPC,
+    { timeout: 20_000 },
+  )
+  .catch(() => {});
+const prefilled = {
+  bootstrap: await page.inputValue("#bootstrap"),
+  workerRpc: await page.inputValue("#worker-rpc"),
+};
+if (prefilled.bootstrap !== FIRST_PUBLIC_RPC || prefilled.workerRpc !== FIRST_PUBLIC_RPC) {
+  await fail(`RPC fields did not prefill from the probe: ${JSON.stringify(prefilled)}`);
+}
+if (probeHits < 1) await fail("the prefill probe made no request");
+ok(`watch address and both RPC fields prefilled on a fresh profile (${FIRST_PUBLIC_RPC})`);
+
+/* --- an RPC URL that never worked must not become the default ----------- */
+
+// The web demo persists the two RPC URLs only once they have served. Checked
+// before the successful run below, because afterwards the proven values would
+// mask a failure to honour the rule.
+await page.fill("#bootstrap", "http://127.0.0.1:1/dead");
+await page.fill("#worker-rpc", "http://127.0.0.1:1/dead");
+await page.fill("#specifier", SPECIFIER);
+await page.click("#toggle");
+await page.waitForFunction(() => document.getElementById("pill")?.textContent === "error", {
+  timeout: 30_000,
+}).catch(() => {});
+if ((await page.textContent("#pill"))?.trim() !== "error") {
+  await fail(`a dead bootstrap RPC did not report an error (pill: ${await page.textContent("#pill")})`);
+}
+{
+  const after = await openPopup();
+  // A failed start must also not leave the session "running" — that would make
+  // the next popup resume polling a worker which never booted.
+  if ((await after.textContent("#pill"))?.trim() === "watching") {
+    await fail("popup resumed watching after a start that failed");
+  }
+  const kept = await after.inputValue("#bootstrap");
+  if (kept.includes(":1/dead")) await fail(`an unproven bootstrap URL was persisted: ${kept}`);
+  await after.close();
+  ok("a bootstrap URL that never booted a worker is not persisted, and does not leave it 'running'");
+}
+
 await page.fill("#bootstrap", `${ORIGIN}/rpc`);
 await page.fill("#worker-rpc", `${ORIGIN}/rpc`);
 await page.fill("#specifier", SPECIFIER);
@@ -237,7 +323,32 @@ const shown = (await page.textContent("#balance")) ?? "";
 if (!shown.includes("1,234")) {
   await fail(
     `popup did not show the balance (got "${shown.trim()}")\n` +
-      `  status: ${(await page.textContent("#detail"))?.trim()}\n  console: ${errors.join("\n")}`,
+      `  status: ${(await page.textContent("#detail"))?.trim()}\n` +
+      `  counters: specifierReads=${specifierReads} bundleFetches=${bundleFetches} balanceCalls=${balanceCalls}\n` +
+      `  fields: ${JSON.stringify({
+        bootstrap: await page.inputValue("#bootstrap"),
+        workerRpc: await page.inputValue("#worker-rpc"),
+        specifier: await page.inputValue("#specifier"),
+      })}\n` +
+      `  sw storage: ${JSON.stringify(
+        await sw.evaluate(async () => ({
+          local: await chrome.storage.local.get(null),
+          session: await chrome.storage.session.get(null),
+        })),
+      )}\n` +
+      `  sw reach: ${await sw.evaluate(async (o) => {
+        try {
+          const r = await fetch(`${o}/rpc`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}',
+          });
+          return `ok ${r.status}`;
+        } catch (e) {
+          return `ERR ${e?.message ?? String(e)}`;
+        }
+      }, ORIGIN)}\n` +
+      `  console: ${errors.join("\n")}`,
   );
 }
 if (specifierReads !== 2) await fail(`expected 2 specifier reads, got ${specifierReads}`);

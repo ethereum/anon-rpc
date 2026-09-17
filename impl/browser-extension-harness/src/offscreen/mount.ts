@@ -143,15 +143,16 @@ function serve(port: RuntimePort, cache: Map<string, Entry>, idleMs: number): vo
         // constructed, and leaving it out meant a caller asking for a
         // different isolation document silently got a worker built with the
         // previous one.
-        key = `${msg.address.toLowerCase()}::${msg.iframeUrl}::${stableStringify(msg.config)}`;
-        const hit = msg.reuse ? cache.get(key) : undefined;
+        const cacheKey = `${msg.address.toLowerCase()}::${msg.iframeUrl}::${stableStringify(msg.config)}`;
+        key = cacheKey;
+        const hit = msg.reuse ? cache.get(cacheKey) : undefined;
         if (hit) {
           clearTimeout(hit.reaper);
           hit.reaper = undefined;
           hit.refs++;
           entry = hit;
         } else {
-          cache.get(key)?.worker.close(); // a re-boot replaces any existing one
+          cache.get(cacheKey)?.worker.close(); // a re-boot replaces any existing one
           const worker = new AnonRpcWorker({
             address: msg.address,
             config: msg.config,
@@ -159,7 +160,18 @@ function serve(port: RuntimePort, cache: Map<string, Entry>, idleMs: number): vo
             iframeUrl: msg.iframeUrl,
           });
           entry = { worker, refs: 1, ready: worker.ready };
-          cache.set(key, entry);
+          cache.set(cacheKey, entry);
+          // A worker that never became ready must NOT stay in the cache. Its
+          // `ready` is already rejected, so every later request for the same
+          // address+config would be answered with the original failure — and
+          // the usual cause of a boot failure is a setting the user is about
+          // to correct, which would then appear not to help. Evicting makes
+          // the retry a real retry.
+          const failed = entry;
+          void failed.ready.catch(() => {
+            if (cache.get(cacheKey) === failed) cache.delete(cacheKey);
+            failed.worker.close();
+          });
         }
         entry.ready.then(
           () => send({ t: "ready" }),
