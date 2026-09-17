@@ -466,6 +466,30 @@ ok("worker CANNOT reach the same no-CORS endpoint — it has none of the extensi
   ok("a boot that failed is evicted from the cache, so the retry is a real retry");
 }
 
+/* --- a stale copy of the assets is named, not hung on -------------------- */
+
+// The whole reason the asset directory carries a version stamp. An extension
+// whose copied assets predate its bundled code asks for a path that is not
+// there — and without the check in assets.ts that is not an error at all:
+// nothing on the boot path has a timeout, so `ready` would never settle.
+//
+// A path from a version that was never installed stands in for the real
+// thing, which is an integrator who upgraded the package and did not re-run
+// the copy.
+const stalePage = await context.newPage();
+await stalePage.goto(
+  `chrome-extension://${extensionId}/page.html?iframeUrl=${encodeURIComponent("anon-rpc/0.0.0-staleco/sandbox.html")}`,
+);
+await stalePage
+  .waitForFunction(() => document.getElementById("out")?.textContent !== "pending", { timeout: 30_000 })
+  .catch(() => {});
+const stale = JSON.parse(await stalePage.textContent("#out"));
+if (stale.ok) await fail("a boot against absent assets succeeded, which cannot be right");
+if (!/not in this extension|re-run/i.test(stale.error ?? "")) {
+  await fail(`absent assets reported unhelpfully: ${stale.error}`);
+}
+ok(`absent assets named, with the fix (§install): ${stale.error.slice(0, 60)}…`);
+
 /* --- §6: a cross-origin iframeUrl is refused ----------------------------- */
 
 // `iframeUrl` says where the null-origin document comes from. A cross-origin

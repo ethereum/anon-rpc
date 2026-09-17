@@ -30,13 +30,21 @@ import {
   type ToOffscreen,
   type WireRequest,
 } from "../wire.js";
+import { ASSET_PATH, assertAssetPresent } from "./assets.js";
 
 /**
- * Default packaged paths — the `anon-rpc` directory the install step copies
- * into the extension. Override both if you put the assets somewhere else.
+ * Default packaged paths — inside the version-stamped directory the install
+ * step copies into the extension, e.g. `anon-rpc/0.3.1-1a2b3c4d/`.
+ *
+ * The stamp is not decoration. These two files are copies, and the code that
+ * speaks to them is rebuilt from node_modules on every install, so an upgrade
+ * can pair mismatched halves. Resolving the path from the build makes a stale
+ * copy a missing file instead of a subtly wrong one — see assets.ts.
+ *
+ * Override both if you put the assets somewhere else.
  */
-export const DEFAULT_OFFSCREEN_URL = "anon-rpc/offscreen.html";
-export const DEFAULT_IFRAME_URL = "anon-rpc/sandbox.html";
+export const DEFAULT_OFFSCREEN_URL = `${ASSET_PATH}/offscreen.html`;
+export const DEFAULT_IFRAME_URL = `${ASSET_PATH}/sandbox.html`;
 
 export type ExtensionWorkerInit = WorkerInit & {
   /**
@@ -108,6 +116,21 @@ export class AnonRpcWorker {
 
     const chrome = chromeApi();
     const offscreenUrl = init.offscreenUrl ?? DEFAULT_OFFSCREEN_URL;
+    const iframeUrl = resolveIframeUrl(init.iframeUrl ?? DEFAULT_IFRAME_URL);
+
+    // Before anything is created: a missing asset is the one failure on this
+    // path that would otherwise be a hang rather than an error (assets.ts).
+    // Only OUR origin is checked — a cross-origin iframeUrl is §6's to reject,
+    // with §6's message, and fetching it here would answer a different
+    // question badly.
+    const ownOrigin = chrome.runtime.getURL("");
+    await Promise.all([
+      offscreenUrl === false
+        ? undefined
+        : assertAssetPresent(chrome.runtime.getURL(offscreenUrl), "offscreen document"),
+      iframeUrl.startsWith(ownOrigin) ? assertAssetPresent(iframeUrl, "sandboxed page") : undefined,
+    ]);
+
     if (offscreenUrl !== false) {
       await ensureOffscreenDocument(chrome.runtime.getURL(offscreenUrl));
     }
@@ -126,7 +149,7 @@ export class AnonRpcWorker {
       t: "boot",
       address: init.address,
       config: init.config,
-      iframeUrl: resolveIframeUrl(init.iframeUrl ?? DEFAULT_IFRAME_URL),
+      iframeUrl,
       reuse: init.reuse ?? true,
     });
     for (const queued of this.#outbox.splice(0)) this.#send(queued);

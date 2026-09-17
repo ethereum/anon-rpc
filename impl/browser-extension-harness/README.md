@@ -32,16 +32,27 @@ and a packaged page to load into it.
 npm i @anon-rpc/browser-extension-harness
 ```
 
-Copy the packaged assets into your extension:
+Copy the packaged assets into your extension — **from your build script, not
+once by hand**:
 
 ```sh
+rm -rf extension/anon-rpc
 cp -r node_modules/@anon-rpc/browser-extension-harness/dist/static/anon-rpc extension/
 ```
 
-That gives you `extension/anon-rpc/` holding four files — `offscreen.html` /
-`.js` (the offscreen document) and `sandbox.html` / `.js` (the §6 sandboxed
-page). Keep the directory name: the defaults for `offscreenUrl` and
-`iframeUrl` point at it, so renaming it means setting both.
+That gives you `extension/anon-rpc/<version>-<hash>/` holding four files —
+`offscreen.html` / `.js` (the offscreen document) and `sandbox.html` / `.js`
+(the §6 sandboxed page).
+
+The version stamp in the path is why the copy belongs in your build. Those two
+files are the far half of a protocol whose near half is in `background.js`,
+which your bundler rebuilds from `node_modules` on every install. Upgrade
+without re-copying and the halves disagree — and they disagree *silently*:
+nothing on the boot path has a timeout, so `worker.ready` would simply never
+settle. Resolving the path from the build makes a stale copy a missing file
+instead of a subtly wrong one, and the error names the fix.
+
+Your manifest does not need updating per version; see below.
 
 ## Manifest
 
@@ -64,7 +75,7 @@ name themselves.
   // What puts the worker at an opaque origin with its own CSP — and what the
   // remote-code carve-out is about. This is the only CSP an extension may
   // relax, which is why §5's iframeUrl has to point at a page listed here.
-  "sandbox": { "pages": ["anon-rpc/sandbox.html"] },
+  "sandbox": { "pages": ["anon-rpc/*/sandbox.html"] },
 
   "content_security_policy": {
     "sandbox": "sandbox allow-scripts; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; child-src 'self' blob:; worker-src 'self' blob:; connect-src *;"
@@ -77,6 +88,11 @@ name themselves.
   `importScripts` is checked against `script-src`, not `worker-src`. Without it
   the bundle fails with `The script at 'blob:null/…' failed to load` and nothing
   mentions CSP.
+- **The `*` in `sandbox.pages` is a real wildcard**, which is what keeps this
+  entry stable across upgrades even though the asset directory is
+  version-stamped. Measured, not assumed: `probe/sandbox-glob.mjs` shows a
+  wildcard-listed page getting the sandbox CSP and an unlisted one being
+  refused `eval`.
 - **`connect-src`** bounds what the worker may reach. `*` is right for a general
   anon-client; narrow it if you know your worker's destinations.
 - **`web_accessible_resources` is not needed.** The sandboxed page is framed by
@@ -150,7 +166,7 @@ service worker remotes to it:
 service worker              offscreen document            sandboxed page          Web Worker
 ──────────────              ──────────────────            ──────────────          ──────────
 AnonRpcWorker (§5)   ⟷      @anon-rpc/browser-harness  →  opaque origin      →    the bundle
-your wallet's code          §4 verify, §7–§11              anon-rpc/sandbox.html   (hash-pinned)
+your wallet's code          §4 verify, §7–§11              anon-rpc/<ver>/sandbox   (hash-pinned)
 your RPC provider           the whole harness
       ↑                            │
       └──── provider calls ────────┘

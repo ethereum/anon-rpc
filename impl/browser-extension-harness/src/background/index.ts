@@ -2,4 +2,5 @@
 export { AnonRpcWorker, DEFAULT_OFFSCREEN_URL, DEFAULT_IFRAME_URL } from "./AnonRpcWorker.js";
 export type { ExtensionWorkerInit } from "./AnonRpcWorker.js";
 export { ensureOffscreenDocument, closeOffscreenDocument } from "./offscreen.js";
+export { ASSET_PATH, PKG_VERSION, assetUrl } from "./assets.js";
 export type * from "@anon-rpc/browser-harness";

@@ -88,10 +88,12 @@ await new Promise((res, rej) => {
   if (names.sort().join(",") !== onDisk.join(",")) {
     await fail(`zip contents differ from dist/unpacked\n  zip: ${names}\n  dir: ${onDisk}`);
   }
-  // The harness assets must arrive in their own directory, not loose among the
-  // demo's pages — the manifest and the harness defaults both name it.
-  if (!names.includes("anon-rpc/sandbox.html")) {
-    await fail("archive has no anon-rpc/sandbox.html — the harness assets did not keep their directory");
+  // The harness assets must arrive in their own version-stamped directory,
+  // not loose among the demo's pages: the stamp is how a stale copy becomes a
+  // missing file rather than a silent protocol mismatch.
+  const sandboxEntry = names.find((n) => /^anon-rpc\/[^/]+\/sandbox\.html$/.test(n));
+  if (!sandboxEntry) {
+    await fail(`archive has no anon-rpc/<stamp>/sandbox.html — the harness assets lost their directory:\n  ${names}`);
   }
   // A zip cannot be "Load unpacked"ed, so the manifest has to be at the root
   // for the directory the user extracts to be loadable.
@@ -114,7 +116,7 @@ await new Promise((res, rej) => {
   const stale = Object.keys(m).filter((k) => k.startsWith("//"));
   if (stale.length) await fail(`manifest still carries comment keys: ${stale}`);
   if (JSON.stringify(m).includes('"//')) await fail("manifest still carries nested comment keys");
-  if (!m.sandbox?.pages?.includes("anon-rpc/sandbox.html")) {
+  if (!m.sandbox?.pages?.includes("anon-rpc/*/sandbox.html")) {
     await fail("manifest does not declare the sandbox page — worker code would run at the extension's origin");
   }
   if (!/blob:/.test(m.content_security_policy?.sandbox ?? "")) {
