@@ -158,7 +158,8 @@ const worker = new AnonRpcWorker({
   preExisting: { rpcProvider: yourProvider }, // an RPC connection you already have
 });
 
-await worker.ready;
+await worker.ready; // optional; you can call fetch immediately
+
 const res = await worker.fetch("https://rpc.example", {
   method: "POST",
   headers: { "content-type": "application/json" },

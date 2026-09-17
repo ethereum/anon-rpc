@@ -51,7 +51,7 @@ const worker = new AnonRpcWorker({
 });
 
 // Optional: fetch calls made before readiness are buffered, not dropped.
-await worker.ready;
+// await worker.ready;
 
 // A standard fetch, routed through the sandboxed anon-client.
 const res = await worker.fetch("https://rpc.example/", {
