@@ -25,22 +25,21 @@ await mkdir(UNPACKED, { recursive: true });
 
 /* --- the harness's packaged assets -------------------------------------- */
 
-const harnessStatic = resolve(
+const harnessAssets = resolve(
   dirname(require.resolve("@anon-rpc/browser-extension-harness/package.json")),
-  "dist/static",
+  "dist/static/anon-rpc",
 );
 try {
-  await readdir(harnessStatic);
+  await readdir(harnessAssets);
 } catch {
   throw new Error(
-    `@anon-rpc/browser-extension-harness has not been built (${harnessStatic} is missing). ` +
+    `@anon-rpc/browser-extension-harness has not been built (${harnessAssets} is missing). ` +
       "Run `npm run build --workspaces` first.",
   );
 }
-// Recursive, and the tree is kept as-is: the assets arrive in an `anon-rpc/`
-// directory of the package's own naming, which is where the harness's default
-// offscreenUrl and iframeUrl point.
-await cp(harnessStatic, UNPACKED, { recursive: true });
+// The whole directory, name kept: `anon-rpc/` is where the harness's default
+// offscreenUrl and iframeUrl point, and the manifest's sandbox.pages too.
+await cp(harnessAssets, resolve(UNPACKED, "anon-rpc"), { recursive: true });
 
 /* --- the demo's own code ------------------------------------------------ */
 

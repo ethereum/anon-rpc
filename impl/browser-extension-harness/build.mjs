@@ -6,11 +6,10 @@
 //   dist/static/anon-rpc/offscreen.{html,js}  — a ready-made offscreen document
 //   dist/static/anon-rpc/sandbox.{html,js}    — the §6 sandboxed page
 //
-// The `dist/static` wrapper exists so the install step is `cp -r dist/static/*`
-// into an extension and the files land in an `anon-rpc/` directory of their
-// own, rather than loose among the extension's own pages. The directory name
-// is fixed here rather than chosen at copy time because the defaults in
-// AnonRpcWorker.ts point at it.
+// The install step copies that whole `anon-rpc` directory into an extension,
+// so the files land together rather than loose among the extension's own
+// pages. The name is fixed here rather than chosen at copy time because the
+// defaults in AnonRpcWorker.ts point at it.
 //
 // The two library entries keep npm dependencies external so consumers dedupe
 // them. The two STATIC bundles do not: they are copied into an extension

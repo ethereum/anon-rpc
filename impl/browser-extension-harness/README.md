@@ -35,14 +35,13 @@ npm i @anon-rpc/browser-extension-harness
 Copy the packaged assets into your extension:
 
 ```sh
-cp -r node_modules/@anon-rpc/browser-extension-harness/dist/static/* extension/
+cp -r node_modules/@anon-rpc/browser-extension-harness/dist/static/anon-rpc extension/
 ```
 
 That gives you `extension/anon-rpc/` holding four files — `offscreen.html` /
 `.js` (the offscreen document) and `sandbox.html` / `.js` (the §6 sandboxed
-page). The directory name comes from the package, because the defaults for
-`offscreenUrl` and `iframeUrl` point at it; copy the assets somewhere else and
-you must set both.
+page). Keep the directory name: the defaults for `offscreenUrl` and
+`iframeUrl` point at it, so renaming it means setting both.
 
 ## Manifest
 

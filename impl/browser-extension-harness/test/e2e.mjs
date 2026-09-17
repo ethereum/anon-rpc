@@ -234,8 +234,9 @@ probeHash = "0x" + Buffer.from(keccak_256(probeBytes)).toString("hex");
 const extDir = await mkdtemp(resolve(tmpdir(), "anon-rpc-ext-"));
 cleanups.push(() => rm(extDir, { recursive: true, force: true }));
 
-// The harness's static assets, copied in exactly as an integrator would.
-await cp(resolve(PKG, "dist/static"), extDir, { recursive: true });
+// The harness's static assets, copied in exactly as an integrator would —
+// the whole `anon-rpc` directory, keeping its name.
+await cp(resolve(PKG, "dist/static/anon-rpc"), resolve(extDir, "anon-rpc"), { recursive: true });
 
 // The example's own code, bundled — a service worker resolves no bare
 // specifiers, so this is the integrator's build step.

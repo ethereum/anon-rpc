@@ -32,8 +32,8 @@ import {
 } from "../wire.js";
 
 /**
- * Default packaged paths — where `cp -r dist/static/* extension/` puts the
- * assets. Override both if you copied them somewhere else.
+ * Default packaged paths — the `anon-rpc` directory the install step copies
+ * into the extension. Override both if you put the assets somewhere else.
  */
 export const DEFAULT_OFFSCREEN_URL = "anon-rpc/offscreen.html";
 export const DEFAULT_IFRAME_URL = "anon-rpc/sandbox.html";
