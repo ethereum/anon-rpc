@@ -16,71 +16,15 @@ storage are all that package's. What this one adds is the two things an
 extension changes about *where* the harness can run: a DOM to hold the iframe,
 and a packaged page to load into it.
 
-## Why an extension needs its own harness
-
-§6 isolation is a Web Worker inside a **null-origin sandboxed iframe**. That
-needs a DOM, and Manifest V3 replaced the background page with a service worker,
-which does not have one. There is no `document` to append an iframe to.
-
-MV3's answer is the **offscreen document**: a real extension page, with a DOM,
-that a service worker can create and talk to. So the harness runs there, and the
-service worker remotes to it:
-
-```
-service worker              offscreen document            sandboxed page          Web Worker
-──────────────              ──────────────────            ──────────────          ──────────
-AnonRpcWorker (§5)   ⟷      @anon-rpc/browser-harness  →  opaque origin      →    the bundle
-your wallet's code          §4 verify, §7–§11              anon-rpc-sandbox.html   (hash-pinned)
-your RPC provider           the whole harness
-      ↑                            │
-      └──── provider calls ────────┘
-```
-
-The second change is the iframe itself. The harness normally builds it with
-`srcdoc` and an inline bootstrap script, and inside an extension that script
-never runs: a `srcdoc` frame inherits the embedder's Content Security Policy,
-MV3's is `script-src 'self'`, and MV3 **refuses to load an extension** whose
-policy tries to relax it. Since a policy can only be tightened from within a
-document, the only document an extension can give the worker is a page listed
-in `sandbox.pages`, which gets its own writable CSP. `WorkerInit.iframeUrl`
-(SPEC §5) is how the harness is pointed at it. Both halves are measured in
-`probe/csp.mjs` and `probe/relax-csp.mjs`.
-
-Two further arrangements are chosen rather than incidental:
-
-**The bundle is fetched and verified in the offscreen document**, and §4's
-provider call is proxied back out to the service worker instead. That is
-backwards from the obvious design, and it is because of serialisation.
-Extension messaging serialises with **JSON** unless the extension opts in to
-structured clone (`"message_serialization": "structured_clone"`, Chrome 148+),
-and under JSON a `Uint8Array` does not throw — it silently arrives as
-`{"0":72,"1":105}`. Every byte payload here is therefore base64 on the wire, and
-the one large binary payload is kept off that wire entirely. A provider call is
-a short JSON round trip; a bundle is not.
-
-**Booted workers outlive the service worker that asked for them.** Chrome kills
-an idle service worker after ~30 seconds, so an `AnonRpcWorker` held in a module
-variable simply stops existing. If the worker's lifetime were tied to it, every
-wakeup would re-read the specifier, re-fetch the bundle and re-verify the hash.
-Instead the offscreen document keeps them, keyed by address + config, and hands
-the same one back — so a reconnect costs a message. The e2e asserts this: a
-second call performs no specifier read and no bundle fetch.
-
-## Remotely hosted code, and why this is allowed
-
-Chrome Web Store policy prohibits remotely hosted code in MV3 — all of an
-extension's logic must be in the package. anon-rpc fetches an anon-client bundle
-at runtime, which is exactly that.
-
-The exception is the thing anon-rpc already does: **"remotely hosted code is
-supported in sandboxed iframes"**
-([Chrome's migration guide](https://developer.chrome.com/docs/extensions/develop/migrate/improve-security)).
-§6 isolation is a sandboxed iframe, so a conforming anon-rpc harness lands
-inside the carve-out by construction rather than by arrangement. The bundle is
-also hash-pinned on-chain and verified before it runs (§4), which is a stronger
-integrity claim than "it was in the zip file" — but that is an argument, and the
-carve-out is the rule. Confirm current policy before you ship; policy moves
-faster than specs do.
+- [Install](#install)
+- [Manifest](#manifest)
+- [Use](#use)
+  - [If your extension already has an offscreen document](#if-your-extension-already-has-an-offscreen-document)
+- [Why an extension needs its own harness](#why-an-extension-needs-its-own-harness)
+- [Remotely hosted code, and why this is allowed](#remotely-hosted-code-and-why-this-is-allowed)
+- [What the worker can and cannot reach](#what-the-worker-can-and-cannot-reach)
+- [Running the tests](#running-the-tests)
+- [Status](#status)
 
 ## Install
 
@@ -189,6 +133,72 @@ new AnonRpcWorker({ address, preExisting, offscreenUrl: false });
 
 `mountOffscreenHost()` only claims ports named `anon-rpc.worker`, so it
 coexists with whatever else that document does.
+
+## Why an extension needs its own harness
+
+§6 isolation is a Web Worker inside a **null-origin sandboxed iframe**. That
+needs a DOM, and Manifest V3 replaced the background page with a service worker,
+which does not have one. There is no `document` to append an iframe to.
+
+MV3's answer is the **offscreen document**: a real extension page, with a DOM,
+that a service worker can create and talk to. So the harness runs there, and the
+service worker remotes to it:
+
+```
+service worker              offscreen document            sandboxed page          Web Worker
+──────────────              ──────────────────            ──────────────          ──────────
+AnonRpcWorker (§5)   ⟷      @anon-rpc/browser-harness  →  opaque origin      →    the bundle
+your wallet's code          §4 verify, §7–§11              anon-rpc-sandbox.html   (hash-pinned)
+your RPC provider           the whole harness
+      ↑                            │
+      └──── provider calls ────────┘
+```
+
+The second change is the iframe itself. The harness normally builds it with
+`srcdoc` and an inline bootstrap script, and inside an extension that script
+never runs: a `srcdoc` frame inherits the embedder's Content Security Policy,
+MV3's is `script-src 'self'`, and MV3 **refuses to load an extension** whose
+policy tries to relax it. Since a policy can only be tightened from within a
+document, the only document an extension can give the worker is a page listed
+in `sandbox.pages`, which gets its own writable CSP. `WorkerInit.iframeUrl`
+(SPEC §5) is how the harness is pointed at it. Both halves are measured in
+`probe/csp.mjs` and `probe/relax-csp.mjs`.
+
+Two further arrangements are chosen rather than incidental:
+
+**The bundle is fetched and verified in the offscreen document**, and §4's
+provider call is proxied back out to the service worker instead. That is
+backwards from the obvious design, and it is because of serialisation.
+Extension messaging serialises with **JSON** unless the extension opts in to
+structured clone (`"message_serialization": "structured_clone"`, Chrome 148+),
+and under JSON a `Uint8Array` does not throw — it silently arrives as
+`{"0":72,"1":105}`. Every byte payload here is therefore base64 on the wire, and
+the one large binary payload is kept off that wire entirely. A provider call is
+a short JSON round trip; a bundle is not.
+
+**Booted workers outlive the service worker that asked for them.** Chrome kills
+an idle service worker after ~30 seconds, so an `AnonRpcWorker` held in a module
+variable simply stops existing. If the worker's lifetime were tied to it, every
+wakeup would re-read the specifier, re-fetch the bundle and re-verify the hash.
+Instead the offscreen document keeps them, keyed by address + config, and hands
+the same one back — so a reconnect costs a message. The e2e asserts this: a
+second call performs no specifier read and no bundle fetch.
+
+## Remotely hosted code, and why this is allowed
+
+Chrome Web Store policy prohibits remotely hosted code in MV3 — all of an
+extension's logic must be in the package. anon-rpc fetches an anon-client bundle
+at runtime, which is exactly that.
+
+The exception is the thing anon-rpc already does: **"remotely hosted code is
+supported in sandboxed iframes"**
+([Chrome's migration guide](https://developer.chrome.com/docs/extensions/develop/migrate/improve-security)).
+§6 isolation is a sandboxed iframe, so a conforming anon-rpc harness lands
+inside the carve-out by construction rather than by arrangement. The bundle is
+also hash-pinned on-chain and verified before it runs (§4), which is a stronger
+integrity claim than "it was in the zip file" — but that is an argument, and the
+carve-out is the rule. Confirm current policy before you ship; policy moves
+faster than specs do.
 
 ## What the worker can and cannot reach
 
