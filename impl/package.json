@@ -16,9 +16,10 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present",
+    "typecheck": "npm run build --workspaces --if-present && npm run typecheck:only",
     "test": "npm run test --workspaces --if-present",
-    "test:e2e": "node test/run-e2e.mjs"
+    "test:e2e": "node test/run-e2e.mjs",
+    "typecheck:only": "npm run typecheck --workspaces --if-present"
   },
   "devDependencies": {
     "@kpstreams/server": "^0.2.1",
