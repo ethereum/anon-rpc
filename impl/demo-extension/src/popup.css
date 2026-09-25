@@ -237,3 +237,90 @@ footer {
   font-size: 10.5px;
   min-height: 1.3em;
 }
+
+/* --- §13 log drawer -------------------------------------------------------
+   Same idea as the web demo's, at popup scale: the bar is always visible with
+   the latest line in it, and expands into a short console. Fixed height
+   rather than a share of the viewport, because a popup has no viewport to
+   speak of and a drawer that pushed the controls off-screen would be worse
+   than no drawer. */
+
+.log-drawer {
+  margin: 10px -14px 0;
+  border-top: 1px solid var(--line);
+  background: #0a0810;
+}
+.log-bar { display: flex; align-items: center; gap: 6px; padding-right: 10px; }
+.log-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--dim);
+  font: inherit;
+  text-align: left;
+}
+.log-toggle:hover { color: var(--fg); }
+.log-chevron { font-size: 0.7rem; transition: transform 0.2s; }
+.log-drawer.open .log-chevron { transform: rotate(180deg); }
+.log-bar-title { flex: none; font-weight: 600; font-size: 12px; }
+.log-latest {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  opacity: 0.75;
+}
+.log-count {
+  flex: none;
+  font-size: 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 6px;
+}
+.log-clear {
+  flex: none;
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--dim);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 8px;
+}
+.log-clear:hover { color: var(--fg); border-color: var(--accent); }
+
+.log-body { height: 0; overflow: hidden; transition: height 0.2s ease; }
+.log-drawer.open .log-body { height: 168px; }
+.console {
+  height: 100%;
+  overflow: auto;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--line);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.log-row { display: flex; gap: 7px; }
+.log-at { flex: none; color: #6f6889; }
+/* The source column is the interesting one: "worker" rows were produced by
+   hash-pinned code inside the sandbox, relayed out through acceptLog(). */
+.log-src { flex: none; min-width: 3.6em; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; }
+.log-src.worker { color: var(--accent); }
+.log-src.demo { color: #6f6889; }
+.log-msg { flex: 1; min-width: 0; }
+.log-warn .log-msg { color: #ffd166; }
+.log-error .log-msg { color: var(--down); }
+.log-debug .log-msg { opacity: 0.7; }

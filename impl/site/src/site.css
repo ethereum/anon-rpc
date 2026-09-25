@@ -518,3 +518,95 @@ code {
 @media (max-width: 680px) {
   .nav-links a:not(.gh):not(.nav-cta) { display: none; }
 }
+
+/* --- §13 log drawer (demo) ------------------------------------------------
+   A fixed bar at the foot of the page that expands into a console. Used by
+   /demo/ to show the worker's §13 log calls next to the page's own events.
+   The collapsed bar carries the latest line, so the drawer advertises that it
+   has something worth opening without being open. */
+
+body.has-drawer { padding-bottom: 52px; }
+
+.log-drawer {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 45;
+  background: rgba(12, 10, 18, 0.94);
+  backdrop-filter: blur(14px);
+  border-top: 1px solid var(--border);
+}
+.log-bar { display: flex; align-items: center; gap: 8px; padding-right: 14px; }
+.log-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 24px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-dim);
+  font: inherit;
+  text-align: left;
+}
+.log-toggle:hover { color: var(--text); }
+.log-chevron { font-size: 0.75rem; color: var(--text-muted); transition: transform 0.2s var(--ease); }
+.log-drawer.open .log-chevron { transform: rotate(180deg); }
+.log-bar-title { flex: none; font-weight: 600; font-size: 0.85rem; }
+.log-latest {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+.log-count {
+  flex: none;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.log-body { height: 0; overflow: hidden; transition: height 0.25s var(--ease); }
+.log-drawer.open .log-body { height: 42vh; }
+
+.console {
+  height: 100%;
+  overflow: auto;
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+  background: #08060d;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  line-height: 1.55;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.log-row { display: flex; gap: 10px; }
+.log-at { flex: none; min-width: 3.6em; text-align: right; color: var(--text-muted); }
+/* A fixed-width source tag, so "this came from inside the sandbox" is
+   scannable down the column rather than something you read for. */
+.log-src { flex: none; min-width: 4.2em; font-size: 0.72rem; letter-spacing: 0.04em; text-transform: uppercase; }
+.log-src.worker { color: var(--violet-bright); }
+.log-src.demo { color: var(--text-muted); }
+.log-msg { min-width: 0; flex: 1; }
+.log-debug .log-msg { color: var(--text-muted); }
+.log-info .log-msg { color: var(--text-dim); }
+.log-warn .log-msg { color: var(--warn); }
+.log-error .log-msg { color: var(--err); }
+
+@media (max-width: 640px) {
+  .log-toggle { padding: 12px 16px; }
+  .log-bar-title { display: none; }
+  .log-src { min-width: 0; }
+  .log-drawer.open .log-body { height: 50vh; }
+}

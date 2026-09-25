@@ -54,7 +54,88 @@ const els = {
   delta: $<HTMLDivElement>("delta"),
   checked: $<HTMLDivElement>("checked"),
   bootNote: $<HTMLSpanElement>("boot-note"),
+  drawer: $<HTMLElement>("log-drawer"),
+  logToggle: $<HTMLButtonElement>("log-toggle"),
+  logLatest: $<HTMLSpanElement>("log-latest"),
+  logCount: $<HTMLSpanElement>("log-count"),
+  logClear: $<HTMLButtonElement>("log-clear"),
+  log: $<HTMLDivElement>("log"),
 };
+
+/* --- §13 log drawer ------------------------------------------------------
+   The rows live in the service worker (see background.ts): a popup is
+   destroyed on blur and the worker keeps going without it, so a buffer kept
+   here would forget everything that happened while you were not watching.
+   This renders whatever the service worker has.
+
+   Two sources share the stream. The "worker" rows are §13 log calls made by
+   hash-pinned code inside the sandbox, relayed offscreen → service worker →
+   here; the "demo" rows are this extension's own lifecycle. */
+
+type LogRow = {
+  at: number;
+  src: "demo" | "worker";
+  level: "debug" | "info" | "warn" | "error";
+  msg: string;
+};
+
+/** Rendered rows, keyed by the buffer length already drawn. */
+let drawn = 0;
+
+const clock = (at: number) =>
+  new Date(at).toLocaleTimeString([], { hour12: false, minute: "2-digit", second: "2-digit" });
+
+function renderLogs(rows: LogRow[]): void {
+  // The buffer is a capped window, so it can shrink from the front as well as
+  // grow at the back. Only an append is incremental; anything else redraws.
+  const append = rows.length >= drawn && drawn > 0;
+  if (!append) {
+    els.log.replaceChildren();
+    drawn = 0;
+  }
+  const pinned = els.log.scrollHeight - els.log.scrollTop - els.log.clientHeight < 24;
+
+  for (const r of rows.slice(drawn)) {
+    const row = document.createElement("div");
+    row.className = `log-row log-${r.level}`;
+    const at = document.createElement("span");
+    at.className = "log-at";
+    at.textContent = clock(r.at);
+    const src = document.createElement("span");
+    src.className = `log-src ${r.src}`;
+    src.textContent = r.src;
+    const msg = document.createElement("span");
+    msg.className = "log-msg";
+    // textContent: worker rows are strings chosen by the bundle, which is
+    // precisely the code this popup does not trust with its DOM.
+    msg.textContent = r.msg;
+    row.append(at, src, msg);
+    els.log.appendChild(row);
+  }
+  drawn = rows.length;
+
+  if (pinned) els.log.scrollTop = els.log.scrollHeight;
+  els.logCount.textContent = String(rows.length);
+  els.logLatest.textContent = rows.length ? rows[rows.length - 1].msg : "nothing yet";
+}
+
+async function refreshLogs(): Promise<void> {
+  const res = await send<{ ok: boolean; rows?: LogRow[] }>({ type: "logs" });
+  if (res.ok && res.rows) renderLogs(res.rows);
+}
+
+els.logToggle.addEventListener("click", () => {
+  const open = els.drawer.classList.toggle("open");
+  els.logToggle.setAttribute("aria-expanded", String(open));
+  if (open) els.log.scrollTop = els.log.scrollHeight;
+});
+
+els.logClear.addEventListener("click", () => {
+  void send({ type: "clearLogs" }).then(() => {
+    drawn = 0;
+    renderLogs([]);
+  });
+});
 
 const fields = ["bootstrap", "workerRpc", "specifier", "config", "watch"] as const;
 
@@ -211,10 +292,12 @@ async function poll(): Promise<void> {
   if (!running) return; // closed or stopped while in flight
   if (!res.ok) {
     // Keep polling: a transient RPC failure should not stop the watcher.
+    void refreshLogs();
     setStatus("error", `${res.error} — retrying in ${POLL_MS / 1000} s`);
     return;
   }
   noteBoot(res.booted);
+  void refreshLogs();
   showBalance(BigInt(res.balance!));
   setStatus("live", `request OK in ${res.ms} ms — next poll in ${POLL_MS / 1000} s`);
 }
@@ -241,6 +324,9 @@ async function start(): Promise<void> {
   });
   els.toggle.disabled = false;
   if (!res.ok) {
+    // No poll will follow to refresh the drawer, and a failed boot is exactly
+    // when the worker's own last lines are worth reading.
+    await refreshLogs();
     setStatus("error", res.error ?? "could not start");
     return;
   }
@@ -249,6 +335,7 @@ async function start(): Promise<void> {
 }
 
 async function stop(): Promise<void> {
+  void refreshLogs();
   running = false;
   if (timer !== undefined) clearInterval(timer);
   timer = undefined;
@@ -289,6 +376,10 @@ void (async () => {
 
   for (const f of fields) els[f].value = settings[f] ?? "";
   if (!els.watch.value) els.watch.value = DEFAULT_WATCH;
+
+  // Whatever happened while this popup did not exist is in the service
+  // worker's buffer, which is the whole reason it lives there.
+  await refreshLogs();
 
   const initial = els.specifier.value
     ? (presetBySpecifier(els.specifier.value) ?? CUSTOM)

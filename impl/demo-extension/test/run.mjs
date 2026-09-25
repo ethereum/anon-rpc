@@ -373,6 +373,36 @@ const bootNote = (await page.textContent("#boot-note")) ?? "";
 if (!/cold boot/.test(bootNote)) await fail(`first boot should report cold, said: "${bootNote}"`);
 ok(`first boot reported honestly: ${bootNote.trim()}`);
 
+/* --- the §13 drawer ------------------------------------------------------ */
+
+// Recorded before the popup is destroyed, so the reopen below can show the
+// same rows came back from the service worker rather than being re-created.
+const firstLogCount = Number(await page.textContent("#log-count"));
+{
+  if (await page.evaluate(() => document.getElementById("log-drawer")?.classList.contains("open"))) {
+    await fail("popup log drawer starts expanded; it should be collapsed");
+  }
+  if (!(firstLogCount > 0)) await fail(`log drawer counted ${firstLogCount} rows after a watch`);
+
+  await page.click("#log-toggle");
+  const rows = await page.$$eval("#log .log-row", (els) =>
+    els.map((e) => ({
+      src: e.querySelector(".log-src")?.textContent,
+      msg: e.querySelector(".log-msg")?.textContent,
+    })),
+  );
+  if (rows.length !== firstLogCount) {
+    await fail(`drawer shows ${rows.length} rows but counted ${firstLogCount}`);
+  }
+  if (!rows.some((r) => r.src === "demo" && /cold boot/.test(r.msg ?? ""))) {
+    await fail(`boot was not logged into the drawer — rows: ${JSON.stringify(rows)}`);
+  }
+  if (!rows.some((r) => r.src === "demo" && /eth_getBalance OK/.test(r.msg ?? ""))) {
+    await fail(`the balance query was not logged — rows: ${JSON.stringify(rows)}`);
+  }
+  ok(`popup log drawer opens with ${rows.length} rows, boot and query among them`);
+}
+
 /* --- the point of the architecture: reopening is warm -------------------- */
 
 // Closing the popup destroys its document, exactly as losing focus does. The
@@ -408,6 +438,26 @@ await again.waitForFunction(() => /1,239/.test(document.getElementById("balance"
 const after = (await again.textContent("#balance")) ?? "";
 if (!after.includes("1,239")) await fail(`reopened popup did not poll again (shows "${after.trim()}")`);
 ok("…and kept polling: the new balance arrived through the same worker");
+
+// The reason the buffer lives in the service worker rather than the popup: a
+// popup that owned it would have forgotten everything at `page.close()`, and
+// would now be showing a log that started ten seconds ago.
+{
+  const count = Number(await again.textContent("#log-count"));
+  if (!(count >= firstLogCount)) {
+    await fail(
+      `log did not survive the popup being destroyed (${firstLogCount} rows before, ${count} after)`,
+    );
+  }
+  await again.click("#log-toggle");
+  const rows = await again.$$eval("#log .log-row", (els) =>
+    els.map((e) => e.querySelector(".log-msg")?.textContent ?? ""),
+  );
+  if (!rows.some((m) => /cold boot/.test(m))) {
+    await fail(`the reopened drawer lost the original boot line — rows: ${JSON.stringify(rows)}`);
+  }
+  ok(`log survived the popup closing: ${firstLogCount} rows before, ${count} after, boot line intact`);
+}
 
 const fatal = errors.filter((t) => !/favicon|ERR_FILE_NOT_FOUND/i.test(t));
 if (fatal.length) await fail(`console errors:\n${fatal.join("\n")}`);

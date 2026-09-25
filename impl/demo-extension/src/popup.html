@@ -52,6 +52,22 @@
     <div id="checked"></div>
   </section>
 
+  <!-- §13 log drawer. Collapsed by default; the bar shows the latest line so
+       there is a reason to open it. Entries live in the service worker, not
+       here: this popup is destroyed every time it loses focus. -->
+  <section class="log-drawer" id="log-drawer">
+    <div class="log-bar">
+      <button class="log-toggle" id="log-toggle" aria-expanded="false" aria-controls="log" type="button">
+        <span class="log-chevron" aria-hidden="true">▾</span>
+        <span class="log-bar-title">Log</span>
+        <span class="log-latest" id="log-latest">nothing yet</span>
+        <span class="log-count" id="log-count">0</span>
+      </button>
+      <button class="log-clear" id="log-clear" type="button" title="Clear the log">Clear</button>
+    </div>
+    <div class="log-body"><div id="log" class="console" role="log" aria-live="polite"></div></div>
+  </section>
+
   <footer>
     <span id="boot-note"></span>
   </footer>

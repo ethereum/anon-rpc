@@ -271,6 +271,28 @@
     </div>
   </footer>
 
+  <!--
+    §13 log drawer. Collapsed by default, because the demo works without ever
+    opening it; the collapsed bar still shows the latest line, which is how you
+    notice there is something to open.
+
+    Two sources share it: this page's own lifecycle events, and the worker's
+    §13 log calls collected through worker.acceptLog(). The source tag on each
+    row is the point — the "worker" lines were produced inside the sandbox.
+  -->
+  <div class="log-drawer" id="log-drawer">
+    <div class="log-bar">
+      <button class="log-toggle" id="log-toggle" aria-expanded="false" aria-controls="log">
+        <span class="log-chevron" aria-hidden="true">▾</span>
+        <span class="log-bar-title">Log</span>
+        <span class="log-latest" id="log-latest">idle — nothing has run yet</span>
+        <span class="log-count" id="log-count">0</span>
+      </button>
+      <button class="ghost sm" id="log-clear" type="button">Clear</button>
+    </div>
+    <div class="log-body"><div id="log" class="console" role="log" aria-live="polite"></div></div>
+  </div>
+
   <script type="module" src="./main.ts"></script>
 </body>
 </html>

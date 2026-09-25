@@ -116,7 +116,105 @@ const els = {
   balance: $<HTMLDivElement>("balance"),
   delta: $<HTMLDivElement>("delta"),
   checked: $<HTMLDivElement>("checked"),
+  drawer: $<HTMLDivElement>("log-drawer"),
+  logToggle: $<HTMLButtonElement>("log-toggle"),
+  logLatest: $<HTMLSpanElement>("log-latest"),
+  logCount: $<HTMLSpanElement>("log-count"),
+  logClear: $<HTMLButtonElement>("log-clear"),
+  log: $<HTMLDivElement>("log"),
 };
+
+/* --- §13 log drawer ------------------------------------------------------
+   Two sources, one stream: this page's lifecycle events and the worker's §13
+   log calls, pulled with worker.acceptLog(). The source column is what makes
+   the demo's point visible — the "worker" rows were produced by hash-pinned
+   code inside the sandbox, and they arrive here because the host asked for
+   them, not because the harness decided where to put them. */
+
+type LogLevel = "debug" | "info" | "warn" | "error";
+
+/** Rows kept in the DOM. The harness retains its own; this is just the view. */
+const LOG_ROWS = 500;
+
+let logCount = 0;
+let logStart = Date.now();
+
+function logLine(source: "demo" | "worker", level: LogLevel, msg: string): void {
+  // Pinned-to-bottom is checked BEFORE appending: a reader who has scrolled up
+  // to look at something is not helped by being yanked back down.
+  const pinned = els.log.scrollHeight - els.log.scrollTop - els.log.clientHeight < 24;
+
+  const row = document.createElement("div");
+  row.className = `log-row log-${level}`;
+  const at = document.createElement("span");
+  at.className = "log-at";
+  at.textContent = `+${((Date.now() - logStart) / 1000).toFixed(1)}s`;
+  const src = document.createElement("span");
+  src.className = `log-src ${source}`;
+  src.textContent = source;
+  const text = document.createElement("span");
+  text.className = "log-msg";
+  // textContent, not innerHTML: worker log arguments are strings chosen by
+  // the bundle, and the bundle is exactly the code this page does not trust
+  // with its DOM.
+  text.textContent = msg;
+  row.append(at, src, text);
+  els.log.appendChild(row);
+
+  while (els.log.children.length > LOG_ROWS) els.log.removeChild(els.log.firstChild!);
+  if (pinned) els.log.scrollTop = els.log.scrollHeight;
+
+  els.logLatest.textContent = msg;
+  els.logCount.textContent = String(++logCount);
+}
+
+els.logToggle.addEventListener("click", () => {
+  const open = els.drawer.classList.toggle("open");
+  els.logToggle.setAttribute("aria-expanded", String(open));
+  if (open) els.log.scrollTop = els.log.scrollHeight;
+});
+
+els.logClear.addEventListener("click", () => {
+  els.log.replaceChildren();
+  logCount = 0;
+  els.logCount.textContent = "0";
+  els.logLatest.textContent = "cleared";
+});
+
+document.body.classList.add("has-drawer");
+
+/**
+ * Drain the worker's §13 entries into the drawer until it closes.
+ *
+ * One pump per worker. `acceptLog` rejects when the worker fails or is closed
+ * — after yielding whatever it still held, which is why a failed boot leaves
+ * its explanation in the drawer rather than only in the status line.
+ */
+function pumpWorkerLogs(w: AnonRpcWorker): void {
+  void (async () => {
+    for (;;) {
+      let entry;
+      try {
+        entry = await w.acceptLog();
+      } catch {
+        return;
+      }
+      if (worker !== w) return; // a later worker owns the drawer now
+      logLine("worker", entry.level, entry.args.map(renderLogArg).join(" "));
+    }
+  })();
+}
+
+/** A §13 LogArg as one readable token. Bytes are described, not dumped. */
+function renderLogArg(a: unknown): string {
+  if (typeof a === "string") return a;
+  if (a instanceof Uint8Array) return `<${a.byteLength} bytes>`;
+  try {
+    return JSON.stringify(a) ?? String(a);
+  } catch {
+    return String(a);
+  }
+}
 
 /* --- settings persistence --- */
 
@@ -360,12 +458,14 @@ async function tick(s: Settings): Promise<void> {
       setTimeout(() => els.balance.classList.remove("flash-up", "flash-down"), 2500);
     }
     lastBalance = wei;
+    logLine("demo", "info", `eth_getBalance OK in ${Date.now() - t0} ms — ${formatEth(wei)} ETH`);
     setStatus(
       "live",
       `request OK in ${Date.now() - t0} ms — next poll in ${POLL_MS / 1000} s`,
     );
   } catch (e) {
     if (!running) return; // stop() rejected the in-flight request: not an error
+    logLine("demo", "error", `eth_getBalance failed after ${Date.now() - t0} ms: ${(e as Error).message}`);
     // Keep polling: a transient RPC failure should not stop the watcher.
     setStatus(
       "error",
@@ -393,6 +493,8 @@ async function start(): Promise<void> {
   els.delta.className = "";
 
   setStatus("boot", "reading specifier, fetching bundle, verifying keccak256…");
+  logStart = Date.now();
+  logLine("demo", "info", `starting — specifier ${s.specifier} via ${new URL(s.bootstrap).host}`);
   const bootstrapCall = jsonRpc(fetch, s.bootstrap);
   worker = new AnonRpcWorker({
     address: s.specifier,
@@ -404,13 +506,20 @@ async function start(): Promise<void> {
     },
   });
 
+  pumpWorkerLogs(worker);
+
+  const t0 = Date.now();
   try {
     await worker.ready;
   } catch (e) {
+    // Logged as well as shown: the status line holds one message, and the
+    // worker's own last lines are sitting right above this one in the drawer.
+    logLine("demo", "error", `worker failed to start: ${(e as Error).message}`);
     setStatus("error", `worker failed to start: ${(e as Error).message}`);
     stop(true);
     return;
   }
+  logLine("demo", "info", `worker ready in ${Date.now() - t0} ms — bundle hash verified, running in the sandbox`);
   if (!running) return; // stopped while booting
 
   // A worker booted through this bootstrap RPC: it has earned persistence.
@@ -424,6 +533,7 @@ async function start(): Promise<void> {
 }
 
 function stop(keepStatus = false): void {
+  if (running) logLine("demo", "info", "stopped — worker closed");
   running = false;
   if (timer !== undefined) clearInterval(timer);
   timer = undefined;

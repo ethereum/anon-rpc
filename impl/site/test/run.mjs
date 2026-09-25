@@ -373,6 +373,57 @@ if (!/request OK in \d+ ms/.test(detail ?? "")) {
 }
 ok(`status shows request outcome (${detail.trim()})`);
 
+/* --- the §13 log drawer -------------------------------------------------- */
+
+// The drawer is the only place the worker's own §13 output can surface on this
+// page, so "it renders" is the assertion that matters. The worker in this test
+// is the passthrough template, which logs only on failure — so the rows here
+// are the demo's own, and a worker row is not something this run can require.
+{
+  const drawerOpen = await page.evaluate(() =>
+    document.getElementById("log-drawer")?.classList.contains("open"),
+  );
+  if (drawerOpen) fail("log drawer starts expanded; it should be collapsed until asked for");
+
+  // The collapsed bar advertises what is inside: latest line and a count.
+  const count = Number(await page.textContent("#log-count"));
+  if (!(count > 0)) fail(`log drawer counted ${count} entries after a successful watch`);
+  const latest = (await page.textContent("#log-latest")) ?? "";
+  if (!/eth_getBalance OK/.test(latest)) {
+    fail(`collapsed drawer does not show the latest line — got: ${latest}`);
+  }
+
+  await page.click("#log-toggle");
+  await page.waitForFunction(
+    () => (document.getElementById("log-body")?.clientHeight ?? 1) >= 0
+      && document.getElementById("log-drawer")?.classList.contains("open"),
+    null,
+    { timeout: 5000 },
+  );
+  if ((await page.getAttribute("#log-toggle", "aria-expanded")) !== "true") {
+    fail("log drawer did not report itself expanded to assistive tech");
+  }
+
+  const rows = await page.$$eval("#log .log-row", (els) =>
+    els.map((e) => ({
+      src: e.querySelector(".log-src")?.textContent,
+      at: e.querySelector(".log-at")?.textContent,
+      msg: e.querySelector(".log-msg")?.textContent,
+    })),
+  );
+  if (rows.length !== count) fail(`drawer shows ${rows.length} rows but counted ${count}`);
+  if (!rows.every((r) => /^\+\d+\.\d+s$/.test(r.at ?? ""))) {
+    fail(`every row needs an elapsed stamp — got: ${JSON.stringify(rows.map((r) => r.at))}`);
+  }
+  if (!rows.some((r) => r.src === "demo" && /worker ready in \d+ ms/.test(r.msg ?? ""))) {
+    fail(`boot was not logged — rows: ${JSON.stringify(rows)}`);
+  }
+  if (!rows.some((r) => r.src === "demo" && /eth_getBalance OK/.test(r.msg ?? ""))) {
+    fail(`the balance query was not logged — rows: ${JSON.stringify(rows)}`);
+  }
+  ok(`log drawer opens with ${rows.length} timestamped rows, boot and query among them`);
+}
+
 // Change the balance on-chain; the next poll must reflect it.
 await fetch(rpc, {
   method: "POST",

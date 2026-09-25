@@ -68,6 +68,7 @@ type Runtime = {
 const SAVED_KEY = "settings";
 const ACTIVE_KEY = "active";
 const RUNTIME_KEY = "runtime";
+const LOGS_KEY = "logs";
 
 const loadSaved = async (): Promise<Partial<Settings>> =>
   ((await chrome.storage.local.get(SAVED_KEY))[SAVED_KEY] as Partial<Settings>) ?? {};
@@ -81,6 +82,78 @@ const saveActive = (s: Settings): Promise<void> => chrome.storage.session.set({ 
 const loadRuntime = async (): Promise<Runtime> =>
   ((await chrome.storage.session.get(RUNTIME_KEY))[RUNTIME_KEY] as Runtime) ?? { running: false };
 const saveRuntime = (r: Runtime): Promise<void> => chrome.storage.session.set({ [RUNTIME_KEY]: r });
+
+/* --- §13 log buffer ------------------------------------------------------
+   The popup cannot hold this. It is destroyed the moment it loses focus, and
+   the worker keeps running without it — so a log kept in the popup would show
+   only what happened while you were looking at it, which is the opposite of
+   what a log is for.
+
+   So the service worker collects, and `chrome.storage.session` holds the
+   result: it survives the popup closing AND this service worker being killed
+   for idleness, while still being cleared when the browser restarts, which is
+   the right lifetime for diagnostics. */
+
+export type LogRow = {
+  at: number;
+  src: "demo" | "worker";
+  level: "debug" | "info" | "warn" | "error";
+  msg: string;
+};
+
+/** Rows retained for the popup. The harness retains its own (§13.1). */
+const LOG_ROWS = 300;
+
+// Appends are serialised through this chain. Two concurrent read-modify-write
+// cycles against the same key would silently lose whichever wrote first, and
+// a log that drops lines under load is worse than no log.
+let logTail: Promise<unknown> = Promise.resolve();
+
+const loadLogs = async (): Promise<LogRow[]> =>
+  ((await chrome.storage.session.get(LOGS_KEY))[LOGS_KEY] as LogRow[]) ?? [];
+
+function appendLog(src: LogRow["src"], level: LogRow["level"], msg: string): Promise<void> {
+  logTail = logTail.then(async () => {
+    const rows = await loadLogs();
+    rows.push({ at: Date.now(), src, level, msg });
+    await chrome.storage.session.set({ [LOGS_KEY]: rows.slice(-LOG_ROWS) });
+  });
+  return logTail as Promise<void>;
+}
+
+/** A §13 LogArg as one readable token. Bytes are described, not transcribed. */
+function renderLogArg(a: unknown): string {
+  if (typeof a === "string") return a;
+  if (a instanceof Uint8Array) return `<${a.byteLength} bytes>`;
+  try {
+    return JSON.stringify(a) ?? String(a);
+  } catch {
+    return String(a);
+  }
+}
+
+/**
+ * Drain a worker's §13 entries into the buffer until it closes.
+ *
+ * Started once per worker per service-worker incarnation. The loop ends on
+ * its own: `acceptLog` rejects when the worker fails or is closed, after
+ * yielding what it still held, so the lines explaining a failure land in the
+ * buffer first. A superseded worker is closed by ensureWorker, which is what
+ * retires its pump — no separate bookkeeping.
+ */
+function pumpWorkerLogs(w: AnonRpcWorker): void {
+  void (async () => {
+    for (;;) {
+      let entry;
+      try {
+        entry = await w.acceptLog();
+      } catch {
+        return;
+      }
+      void appendLog("worker", entry.level, entry.args.map(renderLogArg).join(" "));
+    }
+  })();
+}
 
 /** Per-incarnation. A new service worker starts with nothing here. */
 let worker: AnonRpcWorker | undefined;
@@ -132,16 +205,31 @@ async function ensureWorker(s: Settings): Promise<{ worker: AnonRpcWorker; bootM
       },
     },
   });
+  // Pumped BEFORE awaiting ready: a worker that fails during boot has usually
+  // said why, and those entries are exactly the ones worth keeping. Note that
+  // this does NOT cache `w` yet — a worker whose ready rejects must not become
+  // the cached one, or every retry returns the original failure.
+  pumpWorkerLogs(w);
   await w.ready;
 
   worker = w;
   workerKey = key;
+
   // A worker booted through this bootstrap URL: it has earned persistence.
   await mergeSaved({ bootstrap: s.bootstrap });
   // §4's specifier read goes through the provider above. If it never fired,
   // nothing was re-read, re-fetched or re-verified — the offscreen document
   // returned a worker it already had booted.
-  return { worker: w, bootMs: Date.now() - t0, cold: providerCalls > before };
+  const bootMs = Date.now() - t0;
+  const cold = providerCalls > before;
+  void appendLog(
+    "demo",
+    "info",
+    cold
+      ? `cold boot in ${bootMs} ms — specifier read, bundle fetched, keccak256 verified`
+      : `warm boot in ${bootMs} ms — reattached to the worker already running offscreen`,
+  );
+  return { worker: w, bootMs, cold };
 }
 
 /**
@@ -171,6 +259,9 @@ function validate(s: Partial<Settings>): Settings {
 
 type Request =
   | { type: "status" }
+  /** Everything the log buffer holds; the popup renders the whole window. */
+  | { type: "logs" }
+  | { type: "clearLogs" }
   /** Remember the fields that are not RPC URLs, as typed. */
   | { type: "save"; settings: Partial<Settings> }
   | { type: "start"; settings: Settings }
@@ -202,17 +293,26 @@ async function handle(req: Request): Promise<unknown> {
       await mergeSaved(typedOnly(req.settings));
       return { ok: true };
 
+    case "logs":
+      return { ok: true, rows: await loadLogs() };
+
+    case "clearLogs":
+      await chrome.storage.session.set({ [LOGS_KEY]: [] });
+      return { ok: true };
+
     case "start": {
       const s = validate(req.settings);
       await mergeSaved(typedOnly(s));
       await saveActive(s);
       await saveRuntime({ running: true });
+      await appendLog("demo", "info", `starting — specifier ${s.specifier} via ${new URL(s.bootstrap).host}`);
       try {
         const { bootMs, cold } = await ensureWorker(s);
         const runtime: Runtime = { running: true, bootMs, cold };
         await saveRuntime(runtime);
         return { ok: true, runtime };
       } catch (e) {
+        void appendLog("demo", "error", `start failed: ${(e as Error)?.message ?? String(e)}`);
         // A start that failed must not leave the session marked as running:
         // the next popup would read that and resume polling a worker which
         // never booted, reporting RPC errors forever.
@@ -232,6 +332,7 @@ async function handle(req: Request): Promise<unknown> {
       const wei = BigInt(result).toString();
       // The worker RPC answered a real query: it has earned persistence.
       await mergeSaved({ workerRpc: s.workerRpc });
+      void appendLog("demo", "info", `eth_getBalance OK in ${Date.now() - t0} ms — ${wei} wei`);
       const runtime: Runtime = {
         running: true,
         lastBalance: wei,
@@ -243,6 +344,7 @@ async function handle(req: Request): Promise<unknown> {
     }
 
     case "stop": {
+      void appendLog("demo", "info", "stopped — worker closed");
       worker?.close();
       worker = undefined;
       workerKey = undefined;
