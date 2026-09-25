@@ -610,3 +610,70 @@ body.has-drawer { padding-bottom: 52px; }
   .log-src { min-width: 0; }
   .log-drawer.open .log-body { height: 50vh; }
 }
+
+/* --- dropping an unpublished worker (demo) -------------------------------
+   Two veils, deliberately separate. The first is feedback that a drag is
+   understood; the second is a decision, and it asks before anything runs. */
+
+.drop-veil,
+.confirm-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(8, 6, 13, 0.82);
+  backdrop-filter: blur(6px);
+}
+.confirm-veil { z-index: 70; }
+/* `display: flex` above outranks the UA's `[hidden] { display: none }`, so
+   without this the veils cover the page permanently — invisible in a static
+   review, immediately fatal in use. Attribute specificity wins it back. */
+.drop-veil[hidden],
+.confirm-veil[hidden] { display: none; }
+
+.drop-card {
+  border: 2px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  padding: 44px 56px;
+  text-align: center;
+  background: var(--bg-1);
+  pointer-events: none; /* never swallow the drop itself */
+}
+.drop-title { font-size: 1.3rem; font-weight: 700; margin-bottom: 6px; }
+.drop-card p { margin: 0; color: var(--text-dim); font-size: 0.9rem; }
+
+.confirm-card {
+  width: min(560px, 100%);
+  background: var(--bg-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 24px 26px 20px;
+}
+.confirm-card h2 { margin: 0 0 16px; font-size: 1.15rem; }
+.confirm-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  margin: 0 0 16px;
+  font-size: 0.88rem;
+}
+.confirm-facts dt { color: var(--text-muted); }
+.confirm-facts dd { margin: 0; overflow-wrap: anywhere; }
+.confirm-facts dd.hash { font-family: var(--mono); font-size: 0.78rem; color: var(--violet-bright); }
+.confirm-note { margin: 0 0 10px; font-size: 0.85rem; line-height: 1.5; color: var(--text-dim); }
+.confirm-note.dim { color: var(--text-muted); font-size: 0.8rem; }
+.confirm-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+
+/* The picker entry for a dropped worker, and the hash shown beside it. */
+.local-note { color: var(--violet-bright); }
+.local-note .hash { font-family: var(--mono); font-size: 0.78rem; overflow-wrap: anywhere; }
+
+@media (max-width: 640px) {
+  .drop-card { padding: 32px 24px; }
+  .confirm-facts { grid-template-columns: 1fr; gap: 2px 0; }
+  .confirm-facts dt { margin-top: 8px; }
+}

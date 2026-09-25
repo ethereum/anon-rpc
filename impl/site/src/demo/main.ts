@@ -3,6 +3,7 @@
 // the sandboxed worker's anonymized fetch.
 
 import { AnonRpcWorker } from "@anon-rpc/browser-harness";
+import { keccak_256 } from "@noble/hashes/sha3";
 import adoptersFile from "../../../../adopters.json5";
 
 const SETTINGS_KEY = "anon-rpc-demo-settings";
@@ -83,9 +84,104 @@ const PRESETS: Preset[] = [
     config: "",
     note: "Any IWorkerSpecifier address. Add whatever config that worker expects, if any.",
   },
+  {
+    id: "local",
+    label: "Local file — drop a bundle on this page",
+    specifier: "",
+    config: "",
+    note: "Drag a .js worker bundle anywhere onto this page. Nothing needs publishing: the page pins its hash and builds the specifier itself.",
+  },
 ];
 
-const CUSTOM = PRESETS[PRESETS.length - 1];
+const CUSTOM = PRESETS.find((p) => p.id === "custom")!;
+const LOCAL = PRESETS.find((p) => p.id === "local")!;
+
+/* --- running a worker that was never published ---------------------------
+   Drop a bundle on the page and it runs, under exactly the §4 rules a
+   published one runs under — because the page builds a specifier for it
+   rather than skipping the specifier.
+
+   The chain's job in §4 is to say "these bytes, by this hash, are the worker".
+   Nothing says a host cannot answer that question itself when it already has
+   the bytes: §4 makes the hash the identity and `workerResolvers()` advisory,
+   and §4.1 lists `blob:` precisely so a locally built specifier has somewhere
+   to point. So the page hashes the dropped file, serves it from a blob: URL,
+   and answers the two specifier reads from memory.
+
+   What this is NOT is a way around verification. The harness re-hashes the
+   bytes it fetches and compares them with the hash this provider gave it —
+   the same code path, the same comparison, no special case. Tamper with the
+   blob between drop and boot and the boot fails. */
+
+type LocalWorker = {
+  name: string;
+  bytes: Uint8Array;
+  /** keccak256 of the bytes: the §4 identity, computed here instead of read. */
+  hash: string;
+  /** A §4.1 resolver entry this page can serve. Revoked when superseded. */
+  url: string;
+  /** Synthetic specifier address, derived from the hash — see below. */
+  address: string;
+};
+
+let localWorker: LocalWorker | undefined;
+
+/** Whether the next start should run the dropped file rather than a chain one. */
+const usingLocalWorker = (): boolean =>
+  !!localWorker && els.preset.value === "local" && els.specifier.value.trim() === localWorker.address;
+
+const toHex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+const selector = (sig: string) => "0x" + toHex(keccak_256(new TextEncoder().encode(sig))).slice(0, 8);
+
+/**
+ * A specifier address for a worker that has none.
+ *
+ * Taken from the bundle hash, so it is stable for the same bytes and distinct
+ * for different bytes. That matters beyond tidiness: §11 storage is namespaced
+ * per specifier address, so two dropped workers get two storage namespaces,
+ * and re-dropping the same file returns to the one it had.
+ */
+const localAddress = (hash: string) => "0x" + hash.slice(2, 42);
+
+/** ABI-encode `string[]` as eth_call return data. */
+function encodeStringArray(strings: string[]): string {
+  const word = (n: number) => n.toString(16).padStart(64, "0");
+  let offsets = "";
+  let bodies = "";
+  let cursor = strings.length * 32;
+  for (const str of strings) {
+    offsets += word(cursor);
+    const b = new TextEncoder().encode(str);
+    const padded = Math.ceil(b.length / 32) * 32;
+    bodies += word(b.length) + toHex(b).padEnd(padded * 2, "0");
+    cursor += 32 + padded;
+  }
+  return "0x" + word(32) + word(strings.length) + offsets + bodies;
+}
+
+/**
+ * The §4 half of an `IWorkerSpecifier`, answered from memory.
+ *
+ * Only `eth_call` to this worker's own address is handled; anything else
+ * throws rather than being forwarded, so a local run cannot quietly depend on
+ * a chain connection it is supposed to be doing without.
+ */
+function localProvider(local: LocalWorker) {
+  const HASH = selector("workerHash()");
+  const RESOLVERS = selector("workerResolvers()");
+  return {
+    request: async ({ method, params }: { method: string; params?: unknown[] }) => {
+      const call = (params as [{ to?: string; data?: string }] | undefined)?.[0];
+      if (method !== "eth_call" || call?.to?.toLowerCase() !== local.address.toLowerCase()) {
+        throw new Error(`local worker: no chain to answer ${method}`);
+      }
+      const sel = (call.data ?? "").slice(0, 10);
+      if (sel === HASH) return local.hash;
+      if (sel === RESOLVERS) return encodeStringArray([local.url]);
+      throw new Error(`local worker: unexpected specifier call ${sel}`);
+    },
+  };
+}
 const presetById = (id: string): Preset => PRESETS.find((p) => p.id === id) ?? CUSTOM;
 const presetBySpecifier = (addr: string): Preset | undefined =>
   PRESETS.find((p) => p.specifier && p.specifier.toLowerCase() === addr.toLowerCase());
@@ -122,7 +218,101 @@ const els = {
   logCount: $<HTMLSpanElement>("log-count"),
   logClear: $<HTMLButtonElement>("log-clear"),
   log: $<HTMLDivElement>("log"),
+  dropVeil: $<HTMLDivElement>("drop-veil"),
+  confirmVeil: $<HTMLDivElement>("confirm-veil"),
+  confirmName: $<HTMLElement>("confirm-name"),
+  confirmSize: $<HTMLElement>("confirm-size"),
+  confirmHash: $<HTMLElement>("confirm-hash"),
+  confirmCancel: $<HTMLButtonElement>("confirm-cancel"),
+  confirmRun: $<HTMLButtonElement>("confirm-run"),
 };
+
+/* --- the drop flow -------------------------------------------------------
+   Dragging anything over the page raises a target; dropping a file hashes it
+   and asks. Accepting is a separate click because accepting means running
+   someone's code — the sandbox makes that safe for this page, not safe in
+   general. */
+
+/** The file waiting on a decision. Cleared whichever way the answer goes. */
+let pending: { name: string; bytes: Uint8Array; hash: string } | undefined;
+
+let dragDepth = 0; // dragenter/dragleave fire per child; count rather than toggle
+
+function showDropTarget(on: boolean): void {
+  els.dropVeil.hidden = !on;
+}
+
+window.addEventListener("dragenter", (e) => {
+  if (!e.dataTransfer?.types.includes("Files")) return;
+  dragDepth++;
+  showDropTarget(true);
+});
+window.addEventListener("dragleave", () => {
+  if (--dragDepth <= 0) {
+    dragDepth = 0;
+    showDropTarget(false);
+  }
+});
+window.addEventListener("dragover", (e) => {
+  if (e.dataTransfer?.types.includes("Files")) e.preventDefault(); // or the browser navigates
+});
+window.addEventListener("drop", (e) => {
+  const file = e.dataTransfer?.files?.[0];
+  if (!file) return;
+  e.preventDefault(); // otherwise the browser opens the file and loses the page
+  dragDepth = 0;
+  showDropTarget(false);
+  void offerFile(file);
+});
+
+async function offerFile(file: File): Promise<void> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (!bytes.length) {
+    setStatus("error", `${file.name} is empty`);
+    return;
+  }
+  pending = { name: file.name, bytes, hash: "0x" + toHex(keccak_256(bytes)) };
+  els.confirmName.textContent = file.name;
+  els.confirmSize.textContent = `${bytes.length.toLocaleString("en-US")} bytes`;
+  els.confirmHash.textContent = pending.hash;
+  els.confirmVeil.hidden = false;
+  els.confirmRun.focus();
+}
+
+function dismissConfirm(): void {
+  pending = undefined;
+  els.confirmVeil.hidden = true;
+}
+
+els.confirmCancel.addEventListener("click", dismissConfirm);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !els.confirmVeil.hidden) dismissConfirm();
+});
+
+els.confirmRun.addEventListener("click", () => {
+  if (!pending) return;
+  const { name, bytes, hash } = pending;
+  dismissConfirm();
+
+  // Whatever was running belongs to the previous choice.
+  if (running) stop();
+  // Revoking the old URL matters: a blob: URL pins its bytes in memory for
+  // the life of the document, so dropping ten files would hold ten bundles.
+  if (localWorker) URL.revokeObjectURL(localWorker.url);
+
+  localWorker = {
+    name,
+    bytes,
+    hash,
+    url: URL.createObjectURL(new Blob([bytes as BufferSource], { type: "text/javascript" })),
+    address: localAddress(hash),
+  };
+
+  els.preset.value = LOCAL.id;
+  els.specifier.value = localWorker.address;
+  renderPreset(LOCAL);
+  setStatus("idle", `${name} ready — press Start watching`);
+});
 
 /* --- §13 log drawer ------------------------------------------------------
    Two sources, one stream: this page's lifecycle events and the worker's §13
@@ -256,6 +446,22 @@ for (const p of PRESETS) {
 
 /** Show the notes that belong to the selected preset. */
 function renderPreset(p: Preset): void {
+  if (p.id === LOCAL.id && localWorker) {
+    // The file IS the note: nothing published says what this worker is, so
+    // the page shows the two things that identify it.
+    els.presetNote.className = "field-note local-note";
+    els.presetNote.textContent = "";
+    els.presetNote.append(
+      `${localWorker.name} — ${localWorker.bytes.length.toLocaleString("en-US")} bytes, pinned to `,
+    );
+    const h = document.createElement("span");
+    h.className = "hash";
+    h.textContent = localWorker.hash;
+    els.presetNote.append(h);
+    els.configNote.textContent = p.configNote ?? "";
+    return;
+  }
+  els.presetNote.className = "field-note";
   els.presetNote.textContent = p.note ?? "";
   // Only a caveat about the example config, if the entry carries one; the
   // generic "what this field is" hint is static in the markup.
@@ -264,6 +470,14 @@ function renderPreset(p: Preset): void {
 
 /** Adopt a preset: fill the fields it prescribes, then re-render. */
 function applyPreset(p: Preset): void {
+  if (p.id === LOCAL.id) {
+    // Nothing to prefill: the dropped file supplies both, and picking this
+    // entry with no file is an invitation to drop one.
+    els.specifier.value = localWorker?.address ?? "";
+    persist({ preset: p.id });
+    renderPreset(p);
+    return;
+  }
   if (p.specifier) {
     els.specifier.value = p.specifier;
     persist({ specifier: p.specifier });
@@ -403,6 +617,18 @@ function validate(): Settings {
   const s = Object.fromEntries(fields.map((f) => [f, els[f].value.trim()])) as Settings;
   const isUrl = (u: string) => /^https?:\/\//.test(u);
   const isAddr = (a: string) => /^0x[0-9a-fA-F]{40}$/.test(a);
+  if (els.preset.value === LOCAL.id && !localWorker) {
+    throw new Error("drop a .js worker bundle onto this page first");
+  }
+  if (usingLocalWorker()) {
+    // No bootstrap RPC is needed or wanted: §4's two reads are answered from
+    // memory, so a local run touches no chain at all. Demanding a URL it
+    // would never call would be theatre.
+    if (!isUrl(s.workerRpc)) throw new Error("worker RPC URL must be http(s)");
+    if (!isAddr(s.watch)) throw new Error("watch address must be a 0x… address");
+    parseConfig(s.config);
+    return s;
+  }
   if (!isUrl(s.bootstrap)) throw new Error("bootstrap RPC URL must be http(s)");
   if (!isUrl(s.workerRpc)) throw new Error("worker RPC URL must be http(s)");
   if (!isAddr(s.specifier)) throw new Error("specifier must be a 0x… address");
@@ -492,17 +718,30 @@ async function start(): Promise<void> {
   els.delta.textContent = "";
   els.delta.className = "";
 
-  setStatus("boot", "reading specifier, fetching bundle, verifying keccak256…");
+  const local = usingLocalWorker() ? localWorker : undefined;
+  setStatus(
+    "boot",
+    local ? "verifying keccak256 of the dropped file…" : "reading specifier, fetching bundle, verifying keccak256…",
+  );
   logStart = Date.now();
-  logLine("demo", "info", `starting — specifier ${s.specifier} via ${new URL(s.bootstrap).host}`);
-  const bootstrapCall = jsonRpc(fetch, s.bootstrap);
+  logLine(
+    "demo",
+    "info",
+    local
+      ? `starting ${local.name} — local specifier ${local.address}, pinned to ${local.hash}`
+      : `starting — specifier ${s.specifier} via ${new URL(s.bootstrap).host}`,
+  );
+
+  const bootstrapCall = local ? undefined : jsonRpc(fetch, s.bootstrap);
   worker = new AnonRpcWorker({
-    address: s.specifier,
+    address: local ? local.address : s.specifier,
     config: parseConfig(s.config),
     preExisting: {
-      rpcProvider: {
-        request: ({ method, params }) => bootstrapCall(method, (params as unknown[]) ?? []),
-      },
+      rpcProvider: local
+        ? localProvider(local)
+        : {
+            request: ({ method, params }) => bootstrapCall!(method, (params as unknown[]) ?? []),
+          },
     },
   });
 
@@ -523,7 +762,8 @@ async function start(): Promise<void> {
   if (!running) return; // stopped while booting
 
   // A worker booted through this bootstrap RPC: it has earned persistence.
-  persist({ bootstrap: s.bootstrap });
+  // A local run used none, so there is nothing to have earned it.
+  if (!local) persist({ bootstrap: s.bootstrap });
 
   // `worker.ready` fulfilled: the hash-verified bundle is running in the
   // sandbox. tick() takes over the status from its first in-flight request.

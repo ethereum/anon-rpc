@@ -11,7 +11,8 @@
     "test": "node test/run.mjs"
   },
   "dependencies": {
-    "@anon-rpc/browser-harness": "*"
+    "@anon-rpc/browser-harness": "*",
+    "@noble/hashes": "^1.8.0"
   },
   "devDependencies": {
     "json5": "^2.2.3",

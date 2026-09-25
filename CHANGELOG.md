@@ -4,6 +4,7 @@ Changes to [SPEC.md](SPEC.md) by specification version.
 
 ## 0.3.2 — 2026-09-25
 
+- §4.1: `blob:` URLs are a recognized resolver kind, as browsers define the scheme (and as an equivalent platform defines its own). Such an entry denotes bytes held by one running program, so it cannot appear usefully in a deployed contract; it exists for a host that builds a specifier locally around bytes it already has — a developer running an unpublished worker. Verification is untouched: the pinned hash is still the identity and the bytes are still checked against it. Additive.
 - §5, §13.1: `acceptLog()` — a host can collect the worker's §13 log calls instead of leaving them wherever the harness happened to put them. The host pulls one entry per call, mirroring the worker's own `acceptCall()`, so ordering and back-pressure come from the same shape rather than from a callback the harness drives. Entries are retained up to a harness-chosen bound and MAY be dropped beyond it — the one place a harness may lose a log call it already accepted — and entries retained when a worker fails stay deliverable, because a worker's last words are usually why it failed. Additive for hosts — one that never calls it is unaffected, and where a harness routes uncollected entries is left unspecified. Harness implementers: `AnonRpcWorker` gains a required method.
 
 ## 0.3.1 — 2026-09-16

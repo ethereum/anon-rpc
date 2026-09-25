@@ -11,6 +11,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { createServer } from "node:http";
 import JSON5 from "json5";
 import { chromium } from "playwright";
+import { keccak_256 } from "@noble/hashes/sha3";
 
 const HERE = new URL(".", import.meta.url).pathname; // impl/site/test/
 const SITE = new URL("..", import.meta.url).pathname; // impl/site/
@@ -279,11 +280,12 @@ if ((await page.inputValue("#watch")) !== "0x00000000219ab540356cBB839Cbe05303d7
 ok("watch address prefilled with the default");
 
 // The demo's preset picker is driven by the same adopters.json5 as the
-// wallet guide: every entry, plus the demo-only "custom" option.
+// wallet guide: every entry, plus the two demo-only options — "custom" for a
+// published specifier pasted in by hand, "local" for a dropped file.
 {
   const known = JSON5.parse(await readFile(`${IMPL}../adopters.json5`, "utf8")).workers;
   const options = await page.$$eval("#preset option", (os) => os.map((o) => o.value));
-  const want = [...known.map((w) => w.id), "custom"];
+  const want = [...known.map((w) => w.id), "custom", "local"];
   if (options.join(",") !== want.join(",")) {
     fail(`demo presets don't match adopters.json5 (got ${options}, want ${want})`);
   }
@@ -457,6 +459,85 @@ if (
   fail("settings did not persist across reload after successful use");
 }
 ok("all settings persist across reload after successful use");
+
+/* --- running a worker that was never published --------------------------- */
+
+// Drop the passthrough bundle straight onto the page. The point of the case is
+// what it does NOT need: the bootstrap RPC field is emptied first, so if the
+// page consulted a chain at all the boot would fail. §4 still runs — the page
+// pins the hash it computed and the harness verifies the bytes against it.
+{
+  await page.reload();
+  const b64 = workerBundle.toString("base64");
+  const expectHash =
+    "0x" + Buffer.from(keccak_256(new Uint8Array(workerBundle))).toString("hex");
+
+  const dt = await page.evaluateHandle((data) => {
+    const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+    const t = new DataTransfer();
+    t.items.add(new File([bytes], "unpublished-worker.js", { type: "text/javascript" }));
+    return t;
+  }, b64);
+  await page.dispatchEvent("body", "drop", { dataTransfer: dt });
+
+  await page.waitForSelector("#confirm-veil", { state: "visible", timeout: 10000 });
+  const shownHash = (await page.textContent("#confirm-hash"))?.trim();
+  if (shownHash !== expectHash) {
+    fail(`confirmation shows ${shownHash}, expected keccak256 ${expectHash}`);
+  }
+  const shownName = (await page.textContent("#confirm-name"))?.trim();
+  if (shownName !== "unpublished-worker.js") fail(`confirmation shows the wrong name: ${shownName}`);
+  ok(`dropped file is hashed and confirmed before it runs (${expectHash.slice(0, 18)}…)`);
+
+  // Cancelling must leave nothing behind.
+  await page.click("#confirm-cancel");
+  await page.waitForSelector("#confirm-veil", { state: "hidden", timeout: 5000 });
+  if ((await page.inputValue("#specifier")) !== specifier) {
+    fail("cancelling the confirmation still changed the specifier");
+  }
+  ok("cancelling leaves the page as it was");
+
+  // Drop again and accept.
+  const dt2 = await page.evaluateHandle((data) => {
+    const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+    const t = new DataTransfer();
+    t.items.add(new File([bytes], "unpublished-worker.js", { type: "text/javascript" }));
+    return t;
+  }, b64);
+  await page.dispatchEvent("body", "drop", { dataTransfer: dt2 });
+  await page.waitForSelector("#confirm-veil", { state: "visible", timeout: 10000 });
+  await page.click("#confirm-run");
+  await page.waitForSelector("#confirm-veil", { state: "hidden", timeout: 5000 });
+
+  if ((await page.inputValue("#preset")) !== "local") fail("accepting did not select the local preset");
+  const localAddr = await page.inputValue("#specifier");
+  if (localAddr.toLowerCase() !== expectHash.slice(0, 42).toLowerCase()) {
+    fail(`local specifier address should derive from the hash — got ${localAddr}`);
+  }
+
+  // The proof: no chain. An empty bootstrap URL would fail validation for any
+  // published worker, and is simply unused here.
+  await page.fill("#bootstrap", "");
+  await page.fill("#worker-rpc", rpc);
+  await page.fill("#watch", WATCH);
+  await page.click("#toggle");
+  await page.waitForSelector(".pill.live", { timeout: 30000 }).catch(async () => {
+    fail(`local worker never went live — status: ${await page.textContent("#detail")}`);
+  });
+  await page.waitForFunction(
+    () => /\d/.test(document.getElementById("balance")?.textContent ?? ""),
+    null,
+    { timeout: 15000 },
+  );
+  ok("dropped worker ran with no bootstrap RPC and no specifier contract");
+
+  // And it is genuinely §4: the drawer records the hash the page pinned.
+  const rows = await page.$$eval("#log .log-row .log-msg", (els) => els.map((e) => e.textContent ?? ""));
+  if (!rows.some((m) => m.includes(expectHash))) {
+    fail(`the pinned hash was not logged — rows: ${JSON.stringify(rows)}`);
+  }
+  ok("the local run pinned the file's own keccak256");
+}
 
 console.log("\n✅ site smoke test passed");
 cleanup();

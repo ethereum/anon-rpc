@@ -87,9 +87,12 @@ If the bundle hash does not equal `workerHash()`, the harness MUST reject it.
 Each `workerResolvers()` entry is one of:
 
 - an `https:` URL, fetched with a plain HTTP GET;
-- a **kps resolver string**, fetched over KPS (§4.2).
+- a **kps resolver string**, fetched over KPS (§4.2);
+- a `blob:` URL, as browsers define it — and, on a platform providing the same thing, as that platform defines it — fetched from the host's own environment.
 
 A harness MUST ignore entries it does not recognize.
+
+A `blob:` entry denotes bytes already held by one running program, so it cannot appear usefully in a deployed specifier contract. It is for a host that constructs a specifier locally around bytes it already has, such as a developer running a worker that has not been published. It changes nothing else: the pinned hash is still the identity, and the bytes are still verified against it before they run.
 
 The kps resolver grammar:
 

@@ -272,6 +272,41 @@
   </footer>
 
   <!--
+    Drop target for an unpublished worker. Hidden until a drag arrives; the
+    confirmation below is deliberately a separate step, because accepting a
+    file here means running its code.
+  -->
+  <div class="drop-veil" id="drop-veil" hidden>
+    <div class="drop-card">
+      <div class="drop-title">Drop a worker bundle</div>
+      <p>A single <code>.js</code> file. It runs in the sandbox, pinned to its own hash.</p>
+    </div>
+  </div>
+
+  <div class="confirm-veil" id="confirm-veil" hidden>
+    <div class="confirm-card" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+      <h2 id="confirm-title">Run this worker?</h2>
+      <dl class="confirm-facts">
+        <dt>File</dt><dd id="confirm-name"></dd>
+        <dt>Size</dt><dd id="confirm-size"></dd>
+        <dt>keccak256</dt><dd class="hash" id="confirm-hash"></dd>
+      </dl>
+      <p class="confirm-note">
+        This file has not been published on chain, so nothing vouches for it but
+        you. It runs under the same §4 rules as a published worker — this page
+        pins the hash above and the harness verifies the bytes against it — and
+        inside the same sandbox, with no access to this page. It can still make
+        network requests, and they will carry your IP.
+      </p>
+      <p class="confirm-note dim">Not saved: reload the page and it is gone.</p>
+      <div class="confirm-actions">
+        <button class="ghost" id="confirm-cancel" type="button">Cancel</button>
+        <button class="primary" id="confirm-run" type="button">Run it</button>
+      </div>
+    </div>
+  </div>
+
+  <!--
     §13 log drawer. Collapsed by default, because the demo works without ever
     opening it; the collapsed bar still shows the latest line, which is how you
     notice there is something to open.

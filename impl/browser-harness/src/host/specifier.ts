@@ -97,8 +97,12 @@ export async function fetchAndVerifyBundle(
     let bytes: Uint8Array;
     try {
       // §4.1 entry kinds. `http:` is accepted alongside `https:` as a
-      // development affordance (local resolvers in tests and demos).
-      if (/^https?:\/\//.test(url)) {
+      // development affordance (local resolvers in tests and demos), and
+      // `blob:` because §4.1 lists it: bytes this program already holds,
+      // for a specifier the host built locally. Fetched here, in the HOST
+      // context that minted it — the worker never sees the URL, and would
+      // not be able to resolve it if it did.
+      if (/^(https?|blob):/.test(url)) {
         const resp = await fetch(url);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         bytes = await readBodyCapped(resp, maxBytes);
