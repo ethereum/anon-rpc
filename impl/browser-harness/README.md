@@ -5,7 +5,7 @@ A browser harness for [anon-rpc](https://github.com/ethereum/anon-rpc)
 by running hash-pinned anon-client code inside a sandboxed worker.
 
 Implements the [anon-rpc specification](https://ethereum.github.io/anon-rpc/spec/)
-version **0.3.1**. (The package version is kept `>=` the implemented spec
+version **0.3.2**. (The package version is kept `>=` the implemented spec
 version; a package release without a spec change bumps past it.)
 
 The harness:
@@ -57,6 +57,26 @@ const res = await worker.fetch("https://rpc.example/", {
 
 worker.close(); // tears down the iframe and worker
 ```
+
+### Collecting the worker's logs
+
+A worker's §13 `log` calls go to the console unless you collect them. Pull them
+with `acceptLog()` (SPEC §5, §13.1) and they stop being echoed there:
+
+```ts
+for (;;) {
+  // Resolves with the next entry; waits when there is none. Rejects once the
+  // worker has failed or closed AND its retained entries are drained — so the
+  // lines explaining a failure arrive before the rejection does.
+  const { level, args } = await worker.acceptLog();
+  render(level, args);
+}
+```
+
+Entries are retained from the moment the worker starts, so a line logged
+during boot is still there when you first ask. The buffer is bounded (1000
+entries) and drops the oldest beyond that; §13.1 makes this the one place a
+harness may lose a log call it has already accepted.
 
 ### Strict Content Security Policies
 

@@ -110,6 +110,10 @@ const probeBundle = Buffer.from(
   } catch (e) {
     out.noCors = "blocked";
   }
+  // §13, for the log path: two arguments, one of them not a string, so the
+  // e2e can see that args cross as a LIST and that a structured value is
+  // rendered rather than JSON-mangled on this JSON-only boundary.
+  anonRpcWorker.log.info("probe worker ready", { noCors: out.noCors });
   anonRpcWorker.signalReady();
   for (;;) {
     const call = await anonRpcWorker.acceptCall();
@@ -464,6 +468,40 @@ ok("worker CANNOT reach the same no-CORS endpoint — it has none of the extensi
     await fail(`retrying after a failed boot returned the cached failure: ${retried.error}`);
   }
   ok("a boot that failed is evicted from the cache, so the retry is a real retry");
+}
+
+/* --- §13 logs cross the offscreen boundary ------------------------------- */
+
+// The service worker is two hops from the code that logged: worker → offscreen
+// document → here. Without the pump in mount.ts those entries would sit in the
+// offscreen document's console, which has no devtools entry of its own — so
+// "the logs go to the console" would mean the logs go nowhere.
+{
+  const logPage = await context.newPage();
+  await logPage.goto(`chrome-extension://${extensionId}/page.html?address=${SPECIFIER_PROBE}&logs=1`);
+  await logPage
+    .waitForFunction(() => document.getElementById("out")?.textContent !== "pending", { timeout: 30_000 })
+    .catch(() => {});
+  const raw = (await logPage.textContent("#out")) ?? "";
+  let rows;
+  try {
+    rows = JSON.parse(raw).rows;
+  } catch {
+    await fail(`log page did not produce JSON: ${raw}`);
+  }
+  const entry = (rows ?? []).find((r) => r.args?.[0] === "probe worker ready");
+  if (!entry) await fail(`the worker's §13 line never reached the service worker: ${JSON.stringify(rows)}`);
+  if (entry.level !== "info") await fail(`log level did not survive the hops: ${entry.level}`);
+  if (entry.args.length !== 2) {
+    await fail(`log args arrived joined rather than as a list: ${JSON.stringify(entry.args)}`);
+  }
+  // The second argument was an object. On a JSON-only boundary it must arrive
+  // rendered, not as the "[object Object]" a naive String() would give.
+  if (!/noCors/.test(entry.args[1])) {
+    await fail(`a structured log argument was mangled in transit: ${JSON.stringify(entry.args[1])}`);
+  }
+  ok(`§13 logs reach the service worker intact: ${entry.level} ${JSON.stringify(entry.args)}`);
+  await logPage.close();
 }
 
 /* --- a stale copy of the assets is named, not hung on -------------------- */

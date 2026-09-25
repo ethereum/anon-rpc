@@ -54,6 +54,27 @@ const rpcProvider = {
 // it — cheaply, because the offscreen document still holds the booted worker.
 const workers = new Map<string, AnonRpcWorker>();
 
+// §13 entries collected from each worker, so the example has somewhere to put
+// them and the e2e has something to read. A real extension would render these
+// — the demo extension does — but the shape is the same: one pull loop per
+// worker, ended by the rejection acceptLog() gives when the worker goes away.
+const logs = new Map<string, { level: string; args: string[] }[]>();
+
+function collectLogs(key: string, w: AnonRpcWorker): void {
+  const rows: { level: string; args: string[] }[] = [];
+  logs.set(key, rows);
+  void (async () => {
+    for (;;) {
+      try {
+        const entry = await w.acceptLog();
+        rows.push({ level: entry.level, args: entry.args.map(String) });
+      } catch {
+        return;
+      }
+    }
+  })();
+}
+
 function getWorker(address: string, iframeUrl?: string): AnonRpcWorker {
   const key = `${address}|${iframeUrl ?? ""}`;
   let w = workers.get(key);
@@ -66,6 +87,7 @@ function getWorker(address: string, iframeUrl?: string): AnonRpcWorker {
       ...(iframeUrl ? { iframeUrl } : {}),
     });
     workers.set(key, w);
+    collectLogs(key, w);
     // Failure is final for a worker (§7), so a cache that keeps one hands the
     // same rejection to every retry — and the usual cause of a boot failure
     // is something the caller is about to fix. Anything caching workers needs
@@ -86,6 +108,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
     url?: string;
     iframeUrl?: string;
   };
+  if (m?.type === "anon-logs") {
+    const key = `${m.address || SPECIFIER}|${m.iframeUrl ?? ""}`;
+    respond({ ok: true, rows: logs.get(key) ?? [] });
+    return true;
+  }
   if (m?.type !== "anon-fetch") return;
 
   void (async () => {

@@ -166,6 +166,18 @@ async function main() {
       });
       await w.ready;
 
+      // §13.1: the worker logged "test-worker starting" at its very first
+      // instruction, long before this line asked for it. Retention is what
+      // makes that entry still be here — a push-based sink would have had
+      // nobody to push it to.
+      const takeLog = (ms = 5000) =>
+        Promise.race([
+          w.acceptLog().catch((e) => ({ level: "!", args: [String(e?.message ?? e)] })),
+          new Promise((r) => setTimeout(() => r(null), ms)),
+        ]);
+      const firstLogRaw = await takeLog();
+      const firstLog = firstLogRaw && { level: firstLogRaw.level, args: firstLogRaw.args.map(String) };
+
       const sandbox = document.querySelector("iframe")?.getAttribute("sandbox");
 
       const r1 = await w.fetch(`${cfg.origin}/hello`);
@@ -273,7 +285,17 @@ async function main() {
       const ptKpsGzBody = await rgz.text();
       ptKpsGz.close();
 
+      // A multi-argument entry, to show args cross as a LIST rather than a
+      // pre-joined string: the worker logs ("routing over kps to", addr).
+      let kpsLog = null;
+      for (let i = 0; i < 20 && !kpsLog; i++) {
+        const e = await takeLog(2000);
+        if (!e) break;
+        if (e.args.length > 1) kpsLog = { level: e.level, args: e.args.map(String) };
+      }
+
       return {
+        firstLog, kpsLog,
         sandbox, passthrough, echoed, sentPayload: payload, kpsRemote,
         echoedReq, echoedStream, abortName, afterAbort, callCount, configEcho,
         ptBody, ptCountHeader, ptKpsBody, kpsBadBootError, ptKpsGzBody, signalFailedError,
@@ -284,6 +306,16 @@ async function main() {
 
   // assertions
   check("iframe sandbox is allow-scripts only (§6)", result.sandbox, "allow-scripts");
+  check(
+    "acceptLog delivers a line logged before anyone was listening (§13.1)",
+    JSON.stringify(result.firstLog),
+    JSON.stringify({ level: "info", args: ["test-worker starting"] }),
+  );
+  check(
+    "log args cross as a list, with the level intact (§13.1)",
+    JSON.stringify(result.kpsLog?.args?.[0]) + "/" + result.kpsLog?.level,
+    JSON.stringify("routing over kps to") + "/debug",
+  );
   check("plain fetch passthrough body", result.passthrough, `hello from ${origin}`);
   check(
     "init config delivered to the worker (§7.1)",

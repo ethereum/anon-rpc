@@ -107,4 +107,15 @@ export type FromOffscreen =
     }
   | { t: "response"; callId: number; ok: false; error: WireError }
   | { t: "provider.request"; id: number; method: string; params?: unknown[] }
-  | { t: "log"; level: string; args: unknown[] };
+  /**
+   * One §13 log entry, on its way from the offscreen document to whoever
+   * called acceptLog() in the service worker.
+   *
+   * `args` are RENDERED TO STRINGS before they cross. This boundary is JSON
+   * (see the header), and a §13 LogArg may be a Uint8Array, which JSON turns
+   * into `{"0":72,"1":105}` without complaining. A string is itself a valid
+   * LogArg, so what arrives still conforms — it is a lossier snapshot than a
+   * same-context harness makes, which §13 permits ("serialized or snapshotted
+   * at call time").
+   */
+  | { t: "log"; level: string; args: string[] };

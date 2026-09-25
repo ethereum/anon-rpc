@@ -14,6 +14,13 @@ async function go(): Promise<void> {
     const q = new URLSearchParams(location.search);
     const address = q.get("address") ?? undefined;
     const iframeUrl = q.get("iframeUrl") ?? undefined;
+    // ?logs=1 reads what the worker logged instead of making a call, so the
+    // e2e can inspect the §13 path through the same page.
+    if (q.has("logs")) {
+      const rows = await chrome.runtime.sendMessage({ type: "anon-logs", address, iframeUrl });
+      out.textContent = JSON.stringify(rows);
+      return;
+    }
     const res = await chrome.runtime.sendMessage({
       type: "anon-fetch",
       address,

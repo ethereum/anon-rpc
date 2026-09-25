@@ -2,6 +2,10 @@
 
 Changes to [SPEC.md](SPEC.md) by specification version.
 
+## 0.3.2 — 2026-09-25
+
+- §5, §13.1: `acceptLog()` — a host can collect the worker's §13 log calls instead of leaving them wherever the harness happened to put them. The host pulls one entry per call, mirroring the worker's own `acceptCall()`, so ordering and back-pressure come from the same shape rather than from a callback the harness drives. Entries are retained up to a harness-chosen bound and MAY be dropped beyond it — the one place a harness may lose a log call it already accepted — and entries retained when a worker fails stay deliverable, because a worker's last words are usually why it failed. Additive for hosts — one that never calls it is unaffected, and where a harness routes uncollected entries is left unspecified. Harness implementers: `AnonRpcWorker` gains a required method.
+
 ## 0.3.1 — 2026-09-16
 
 - §5, §6: `WorkerInit.iframeUrl` — a host can tell a browser harness where to load the null-origin document from, instead of the harness constructing one inline. A `srcdoc` frame inherits the embedder's Content Security Policy and a policy can only be tightened from within a document, so an embedder whose policy omits `'unsafe-inline'` — an MV3 browser extension, or any site with a strict `script-src` — could not run the inline bootstrap at all. §6 requires the `sandbox` attribute regardless, requires same-origin, and states that the field grants the worker nothing. Additive: harnesses that do not use an iframe ignore it, and hosts that do not set it are unaffected.

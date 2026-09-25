@@ -177,6 +177,7 @@ function serve(port: RuntimePort, cache: Map<string, Entry>, idleMs: number): vo
           () => send({ t: "ready" }),
           (e) => send({ t: "failed", error: toWireError(e) }),
         );
+        pumpLogs(entry.worker, send, () => closed);
         return;
       }
 
@@ -256,6 +257,53 @@ function serve(port: RuntimePort, cache: Map<string, Entry>, idleMs: number): vo
       }
     }
   });
+}
+
+/**
+ * Drain the worker's §13 log entries out to the service worker, for as long as
+ * this connection lasts.
+ *
+ * Without this the service worker's `acceptLog()` would never resolve and the
+ * entries would pile up in the offscreen document — a context with no
+ * devtools entry of its own, so "the logs go to the console" would mean the
+ * logs go nowhere.
+ *
+ * One pump per connection, not per worker: a reused worker gets a second pump
+ * when a new service worker attaches, and the two compete for entries. That is
+ * acceptable and the alternative is worse — a pump tied to the worker would
+ * outlive every connection and swallow entries with nowhere to send them.
+ */
+function pumpLogs(worker: AnonRpcWorker, send: (m: FromOffscreen) => void, closed: () => boolean): void {
+  void (async () => {
+    while (!closed()) {
+      let entry;
+      try {
+        entry = await worker.acceptLog();
+      } catch {
+        return; // worker closed or failed; its retained entries are drained
+      }
+      if (closed()) return;
+      send({ t: "log", level: entry.level, args: entry.args.map(renderLogArg) });
+    }
+  })();
+}
+
+/**
+ * A §13 LogArg as a string, because this boundary is JSON (see wire.ts).
+ *
+ * Bytes are described rather than transcribed: a log line is diagnostics, and
+ * a base64'd megabyte helps nobody. Everything else round-trips through JSON,
+ * with a fallback for the values that cannot (a cycle, a BigInt).
+ */
+function renderLogArg(a: unknown): string {
+  if (typeof a === "string") return a;
+  if (a instanceof Uint8Array) return `<${a.byteLength} bytes>`;
+  if (a === undefined) return "undefined";
+  try {
+    return JSON.stringify(a) ?? String(a);
+  } catch {
+    return String(a);
+  }
 }
 
 /**

@@ -1,8 +1,8 @@
 # anon-rpc Specification
 
 - **Status:** Draft
-- **Version:** 0.3.1
-- **Date:** 2026-09-16
+- **Version:** 0.3.2
+- **Date:** 2026-09-25
 
 This document is the normative specification for **anon-rpc**, a standard that lets a wallet or application make anonymized RPC requests by running hash-pinned client code inside a sandboxed worker, and granting that code a small, explicit, transport-neutral capability API.
 
@@ -154,10 +154,20 @@ export class AnonRpcWorker {
   // require `useFetch(worker.fetch.bind(worker))`.
   fetch: typeof fetch;
 
+  // Resolves with the next log entry the worker has produced (§13), waiting
+  // for one if none is retained. The host pulls; the harness never pushes.
+  // An abort withdraws the caller without consuming an entry.
+  acceptLog(opts?: { signal?: AbortSignal }): Promise<LogEntry>;
+
   // Clean up resources. For a web harness this means the iframe and its web worker
   // are removed.
   close(): void;
 }
+
+export type LogEntry = {
+  level: "debug" | "info" | "warn" | "error";
+  args: LogArg[];
+};
 
 export type WorkerInit = {
   // The contract specifier address
@@ -432,6 +442,19 @@ The log API is console-like but does not promise browser `console` semantics.
 
 - Log calls are best-effort diagnostics. A worker's correctness MUST NOT depend on log delivery, ordering, formatting, or side effects.
 - Arguments MUST be treated as serialized or snapshotted at call time. A worker MUST NOT assume object identity, prototypes, getters, stack capture, or live inspection.
+
+### 13.1 Delivery to the host
+
+A host reads log entries by calling `acceptLog()` (§5). The host pulls, one
+entry per call; the harness MUST NOT require a host to read them at all.
+
+- Each retained entry MUST be delivered to exactly one `acceptLog()` caller.
+- Delivery SHOULD preserve the order in which the worker made the log calls.
+- A harness SHOULD bound how many undelivered entries it retains. Entries MAY be dropped once that bound is reached — this is the one place where a harness is permitted to lose a log call it has already accepted from the worker.
+- An aborted `acceptLog()` MUST NOT consume an entry.
+- Entries retained when the worker fails or is closed MUST remain deliverable; `acceptLog()` rejects once they are drained. A worker's last words are usually why it failed.
+
+Where a harness routes entries no host ever collects is not specified.
 
 ## 14. Security considerations
 

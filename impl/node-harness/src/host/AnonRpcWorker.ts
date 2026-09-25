@@ -14,6 +14,7 @@
 // something this file decides to install. `fetch` included.
 
 import { CallQueue } from "./call-queue.js";
+import { LogQueue } from "./log-queue.js";
 import { spawnIsolate, type IsolateLimits, type SpawnedIsolate } from "./isolation.js";
 import { installSocketBridge } from "./socket-bridge-host.js";
 import { installFetchBridge } from "./fetch-bridge-host.js";
@@ -21,7 +22,16 @@ import type { AddressPolicy } from "./address-policy.js";
 import { fetchAndVerifyBundle, readSpecifier } from "./specifier.js";
 import { Rpc, RpcError, abortError, type PortLike } from "../protocol.js";
 import type { GuestPayload, GuestReply } from "../child/isolate-thread.js";
-import type { AnonFetchResponse, AnonRequestInit, HeaderList, WorkerInit } from "../spec-types.js";
+import type {
+  AnonFetchResponse,
+  AnonRequestInit,
+  HeaderList,
+  LogEntry,
+  WorkerInit,
+} from "../spec-types.js";
+
+/** §13.1 retention bound; see the browser harness for the sizing note. */
+const LOG_RETENTION = 1000;
 
 export { RpcError } from "../protocol.js";
 export type { IsolateLimits } from "./isolation.js";
@@ -92,6 +102,9 @@ export class AnonRpcWorker {
 
   #rpc?: Rpc;
   #queue = new CallQueue<PendingCall>();
+  // §13.1: ordered, bounded, lossy — the opposite contract to #queue above.
+  #logs = new LogQueue<LogEntry>(LOG_RETENTION);
+  #logsClaimed = false;
   #inFlight = new Map<number, PendingCall>();
   #nextCallId = 1;
   #resolveReady!: () => void;
@@ -242,7 +255,9 @@ export class AnonRpcWorker {
     // thread — arrives here.
     rpc.onEvent("log", (payload: GuestPayload) => {
       const msg = (payload?.args ?? {}) as { level?: string; args?: unknown[] };
-      const level = msg.level as "debug" | "info" | "warn" | "error";
+      const level = msg.level as LogEntry["level"];
+      this.#logs.push({ level, args: (msg.args ?? []) as LogEntry["args"] });
+      if (this.#logsClaimed) return;
       const fn = console[level] ?? console.log;
       fn("[anon-rpc worker]", ...(msg.args ?? []));
     });
@@ -297,6 +312,15 @@ export class AnonRpcWorker {
   }
 
   /** Fail everything in flight and release the isolate. */
+  /**
+   * §5/§13.1: the next log entry the worker produced. The first call claims
+   * the worker's logs, which stops them also reaching the console.
+   */
+  acceptLog(opts?: { signal?: AbortSignal }): Promise<LogEntry> {
+    this.#logsClaimed = true;
+    return this.#logs.take(opts?.signal);
+  }
+
   close(): void {
     this.#fail(new Error("worker closed"));
   }
@@ -313,6 +337,9 @@ export class AnonRpcWorker {
     // promise the caller is awaiting, and a worker that died owes both an
     // answer (§12) rather than silence.
     for (const call of this.#queue.rejectAll(err)) call.reject(err);
+    // Unlike the calls above, retained log entries stay readable (§13.1):
+    // what the worker said on the way down is what explains the way down.
+    this.#logs.close(err);
     for (const [, call] of this.#inFlight) call.reject(err);
     this.#inFlight.clear();
     for (const d of this.#disposers.splice(0)) d();

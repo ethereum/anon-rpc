@@ -157,3 +157,9 @@ export type LogApi = {
   warn(...args: LogArg[]): void;
   error(...args: LogArg[]): void;
 };
+/** §5/§13.1: one log call, as the host collects it through `acceptLog()`. */
+export type LogEntry = {
+  level: "debug" | "info" | "warn" | "error";
+  args: LogArg[];
+};
+

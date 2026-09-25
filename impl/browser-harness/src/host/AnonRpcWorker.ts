@@ -4,11 +4,12 @@
 // §6 isolation (Web Worker inside a null-origin sandboxed iframe), implement the
 // capability API for the worker, and expose `fetch` to the host.
 
-import type { WorkerInit, AnonFetchResponse } from "../spec-types.js";
+import type { WorkerInit, AnonFetchResponse, LogEntry } from "../spec-types.js";
 import { PortRpc, RpcError, type SerializedError } from "../protocol.js";
 import { readSpecifier, fetchAndVerifyBundle } from "./specifier.js";
 import { registerKpsBridge } from "./kps-bridge-host.js";
 import { CallQueue } from "./call-queue.js";
+import { LogQueue } from "./log-queue.js";
 import { normalizeRequest, type WireRequestInit } from "./normalize-request.js";
 import { openStorageBackend, type StorageBackend } from "./idb-storage.js";
 
@@ -16,6 +17,16 @@ import { openStorageBackend, type StorageBackend } from "./idb-storage.js";
 // blob-spawns, since an opaque-origin iframe cannot load host-origin scripts.
 declare const __WORKER_RUNTIME_SRC__: string;
 declare const __IFRAME_BOOT_SRC__: string;
+
+/**
+ * How many undelivered log entries are retained (§13.1 permits a bound, and
+ * requires one to be the only place entries are lost).
+ *
+ * Sized for a worker that logs its way through a slow start — a Tor bootstrap
+ * is hundreds of lines — while a host that never calls acceptLog holds a
+ * bounded amount of garbage rather than an unbounded amount.
+ */
+const LOG_RETENTION = 1000;
 
 type CallRecord = {
   callId: number;
@@ -40,6 +51,13 @@ export class AnonRpcWorker {
 
   // Calls awaiting acceptCall (§8: ordered, no drop, backpressured).
   #queue = new CallQueue<CallRecord>();
+  // Log entries awaiting acceptLog (§13.1: ordered, bounded, lossy).
+  #logs = new LogQueue<LogEntry>(LOG_RETENTION);
+  // Set once the host has shown it is collecting logs, which is what stops
+  // them also going to the console. Not a setting: a host that reads its
+  // worker's logs does not want them duplicated into a console it is not
+  // looking at, and one that never reads still gets the old behaviour.
+  #logsClaimed = false;
   #calls = new Map<number, CallRecord>();
   #nextCallId = 1;
   #readyResolve!: () => void;
@@ -77,6 +95,10 @@ export class AnonRpcWorker {
     }
     this.#calls.clear();
     this.#queue.rejectAll(err);
+    // Note the asymmetry with the call queue above, which is emptied: §13.1
+    // keeps retained log entries deliverable after a failure. The lines a
+    // worker wrote on its way down are the ones worth reading.
+    this.#logs.close(err);
   }
 
   async #boot(): Promise<void> {
@@ -164,6 +186,8 @@ export class AnonRpcWorker {
     });
 
     rpc.onEvent("log", ({ level, args }: { level: string; args: unknown[] }) => {
+      this.#logs.push({ level: level as LogEntry["level"], args: args as LogEntry["args"] });
+      if (this.#logsClaimed) return;
       const fn = (console as any)[level] ?? console.log;
       fn.call(console, "[worker]", ...args.map(renderLogArg));
     });
@@ -264,6 +288,19 @@ export class AnonRpcWorker {
       }
       this.#queue.push(rec);
     });
+  }
+
+  /**
+   * §5/§13.1: the next log entry the worker produced, waiting for one if the
+   * buffer is empty.
+   *
+   * Calling it at all is what claims the worker's logs: from the first call,
+   * entries stop being echoed to the console, because a host that collects
+   * them is not served by seeing them twice.
+   */
+  acceptLog(opts?: { signal?: AbortSignal }): Promise<LogEntry> {
+    this.#logsClaimed = true;
+    return this.#logs.take(opts?.signal);
   }
 
   close(): void {

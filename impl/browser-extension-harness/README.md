@@ -6,7 +6,7 @@ or application make **anonymized RPC requests** by running hash-pinned
 anon-client code inside a sandboxed worker.
 
 Implements the [anon-rpc specification](https://ethereum.github.io/anon-rpc/spec/)
-version **0.3.1**. (The package version is kept `>=` the implemented spec
+version **0.3.2**. (The package version is kept `>=` the implemented spec
 version; a package release without a spec change bumps past it.)
 
 This is a variant of [`@anon-rpc/browser-harness`](../browser-harness), not a
@@ -264,6 +264,12 @@ deliberately incomplete in two ways:
 - **Bodies are buffered, not streamed.** Extension messaging cannot carry a
   `ReadableStream`, so a §9 body is read to bytes before it crosses and base64'd.
   §9 permits this; a large response pays for it twice.
+- **Log arguments arrive as rendered strings.** §13 entries cross the
+  service-worker boundary as JSON, which turns a `Uint8Array` into
+  `{"0":72,…}` without complaining, so `acceptLog()` here yields arguments
+  already rendered — bytes as `<n bytes>`, structured values as JSON. Strings
+  are valid `LogArg`s so this still conforms; it is a lossier snapshot than a
+  same-context harness makes.
 - **Base64 is unconditional.** Chrome 148's opt-in structured clone would let
   `Uint8Array` cross directly. It is not used, because doing so would make the
   wire format depend on a manifest key the integrator sets and on a Chrome

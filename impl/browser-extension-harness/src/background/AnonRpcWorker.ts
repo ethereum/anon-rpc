@@ -18,7 +18,7 @@
 // hands the same one back, so a reconnect costs a message rather than a
 // specifier read, a bundle fetch and a keccak verification.
 
-import type { RpcProvider, WorkerInit } from "@anon-rpc/browser-harness";
+import type { LogEntry, RpcProvider, WorkerInit } from "@anon-rpc/browser-harness";
 import { ensureOffscreenDocument } from "./offscreen.js";
 import { chromeApi, type RuntimePort } from "../chrome-types.js";
 import {
@@ -31,6 +31,10 @@ import {
   type WireRequest,
 } from "../wire.js";
 import { ASSET_PATH, assertAssetPresent } from "./assets.js";
+import { LogQueue } from "./log-queue.js";
+
+/** §13.1 retention bound; see the browser harness for the sizing note. */
+const LOG_RETENTION = 1000;
 
 /**
  * Default packaged paths — inside the version-stamped directory the install
@@ -95,6 +99,10 @@ export class AnonRpcWorker {
   #failure?: unknown;
   /** Buffered until the port exists, so a fetch before boot is not dropped (§8). */
   #outbox: ToOffscreen[] = [];
+  // §13.1: entries forwarded from the offscreen document, where the harness
+  // that produced them actually runs.
+  #logs = new LogQueue<LogEntry>(LOG_RETENTION);
+  #logsClaimed = false;
 
   constructor(init: ExtensionWorkerInit) {
     this.ready = new Promise<void>((res, rej) => {
@@ -216,7 +224,11 @@ export class AnonRpcWorker {
       }
 
       case "log": {
-        // §13: worker logs are diagnostic and untrusted; prefixed, never parsed.
+        this.#logs.push({ level: msg.level as LogEntry["level"], args: msg.args });
+        if (this.#logsClaimed) return;
+        // §13: diagnostics. Prefixed, never parsed. This is where they go
+        // when no host collects them — into the service worker's console,
+        // which is at least a console someone can open.
         const fn = (console as unknown as Record<string, typeof console.log>)[msg.level] ?? console.log;
         fn.call(console, "[anon-rpc worker]", ...msg.args);
         return;
@@ -278,6 +290,18 @@ export class AnonRpcWorker {
    * serving other workers or other features. The worker itself is closed once
    * nothing is using it.
    */
+  /**
+   * §5/§13.1: the next log entry, forwarded from the offscreen document.
+   *
+   * The first call claims them, which stops them also being printed to the
+   * service worker's console — the only console they had before, and one a
+   * popup cannot read anyway.
+   */
+  acceptLog(opts?: { signal?: AbortSignal }): Promise<LogEntry> {
+    this.#logsClaimed = true;
+    return this.#logs.take(opts?.signal);
+  }
+
   close(): void {
     this.#send({ t: "close" });
     try {
@@ -296,6 +320,8 @@ export class AnonRpcWorker {
       call.cleanup?.();
       call.reject(err);
     }
+    // §13.1: retained entries stay readable after the failure they explain.
+    this.#logs.close(err);
     this.#calls.clear();
   }
 }
