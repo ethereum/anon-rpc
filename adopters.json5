@@ -65,5 +65,13 @@
     //   note: "What it is, and how it uses anon-rpc.",
     //   workers: ["tor-js"], // optional; cross-linked to the entries above
     // },
+    {
+      id: "kiwi-news",
+      label: "Kiwi News",
+      kind: "app",
+      url: "https://news.kiwistand.com",
+      note: "A link aggregator for crypto and the open web. Its website reads Optimism and Ethereum mainnet through anon-rpc when readers turn on the anon-rpc switch in Settings. If an RPC provider refuses Tor traffic, it fails over to the next provider.",
+      workers: ["tor-js"],
+    },
   ],
 }
