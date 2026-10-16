@@ -65,5 +65,13 @@
     //   note: "What it is, and how it uses anon-rpc.",
     //   workers: ["tor-js"], // optional; cross-linked to the entries above
     // },
+    {
+      id: "privacy-pools",
+      label: "Privacy Pools",
+      kind: "app",
+      url: "https://v2.privacypools.com",
+      note: "Private deposits, transfers and withdrawals on Ethereum and L2s. Its web app can route every RPC call through anon-rpc when users turn on Connect with Tor in the RPC settings, so the RPC provider never sees the address the call came from. Off by default, and the user picks the gateway.",
+      workers: ["tor-js"],
+    },
   ],
 }
