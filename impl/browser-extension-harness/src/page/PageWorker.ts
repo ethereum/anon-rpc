@@ -22,7 +22,7 @@ import { assertAssetPresent } from "../background/assets.js";
 import { DEFAULT_IFRAME_URL, type ExtensionWorkerInit } from "../background/OffscreenWorker.js";
 import { chromeApi } from "../chrome-types.js";
 import { resolveIframeUrl } from "../iframe-url.js";
-import { copyPlain } from "../wire.js";
+import { copyPlainValue } from "@anon-rpc/harness-core";
 
 export class PageWorker {
   readonly ready: Promise<void>;
@@ -39,7 +39,7 @@ export class PageWorker {
     // §7.1: checked here, synchronously — the browser harness would check it
     // too, but only once the asset check below lets it be constructed, which
     // would turn the constructor's TypeError into a rejected `ready`.
-    const config = copyPlain(init.config, "config");
+    const config = copyPlainValue(init.config, "config");
     // An absolute URL passes through untouched, so a cross-origin one reaches
     // the browser harness's §6 same-origin check instead of being rewritten
     // into a same-origin-looking extension URL (see resolveIframeUrl).

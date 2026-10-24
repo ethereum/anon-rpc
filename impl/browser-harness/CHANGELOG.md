@@ -6,7 +6,8 @@ this package implements the spec version named in its README.
 
 ## 0.4.0 — 2026-10-23
 
-Implements spec 0.4.0.
+Implements spec 0.4.0. Requires `@anon-rpc/harness-core` 0.4.0 (pinned
+exactly).
 
 - **Added: per-call options.** Keys of a `fetch` init that the spec does not
   model — `anonOptions`, standard fields such as `cache`, and anything else —
@@ -21,6 +22,11 @@ Implements spec 0.4.0.
 - `fetch` is typed `AnonFetch`, which accepts `anonOptions` and is still
   assignable to `typeof fetch`. New exported types: `AnonFetch`, `AnonOptions`,
   `PlainValue`.
+- **Internal: platform-neutral code moved to `@anon-rpc/harness-core`** — the
+  spec types, the §4 specifier read and hash check, the call and log queues,
+  §9.4 plain-value copying, and the §12 error helpers — so the harnesses share
+  one copy instead of drifting. `RpcError` and every type are still exported
+  here.
 
 ## 0.3.3 — 2026-10-13
 

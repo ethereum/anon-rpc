@@ -3,7 +3,7 @@
 // list and the effective abort signal.
 
 import type { AnonRequestInit, HeaderList, PlainValue } from "../spec-types.js";
-import { copyPlainValue } from "../plain-value.js";
+import { copyPlainValue } from "@anon-rpc/harness-core";
 
 export type WireRequestInit = {
   method?: string;

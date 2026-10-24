@@ -6,8 +6,8 @@ this package implements the spec version named in its README.
 
 ## 0.4.0 — 2026-10-23
 
-Implements spec 0.4.0. Requires `@anon-rpc/browser-harness` 0.4.0
-(pinned exactly).
+Implements spec 0.4.0. Requires `@anon-rpc/browser-harness` 0.4.0 and
+`@anon-rpc/harness-core` 0.4.0 (both pinned exactly).
 
 - **Added: per-call options.** Keys of a `fetch` init that the spec does not
   model — `anonOptions`, and anything else — are forwarded to the worker
@@ -21,6 +21,8 @@ Implements spec 0.4.0. Requires `@anon-rpc/browser-harness` 0.4.0
   crossed the JSON hop lossily (a `Uint8Array`, an `undefined` property) now
   arrive exactly, and the offscreen worker cache keys on that exact value.
 - `fetch` is typed `AnonFetch` (re-exported from the browser harness).
+- **Internal:** the log queue and the §9.4 plain-value encoding come from
+  `@anon-rpc/harness-core`.
 
 ## 0.3.3 — 2026-10-13
 

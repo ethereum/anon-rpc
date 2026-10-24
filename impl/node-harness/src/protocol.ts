@@ -17,7 +17,9 @@
 // capability API is meant to be transport-neutral (Appendix A), and two
 // harnesses agreeing on framing while disagreeing on transport is the evidence.
 
-export type SerializedError = { name: string; message: string; code?: string };
+import { RpcError, serializeError, type SerializedError } from "@anon-rpc/harness-core";
+
+export { RpcError, serializeError, type SerializedError };
 
 type Wire =
   | { t: "req"; id: number; method: string; args: unknown }
@@ -59,27 +61,6 @@ export type Handler = (args: any, ctx: { signal: AbortSignal }) => Promise<unkno
 
 export type EventHandler = (data: any) => void;
 
-export class RpcError extends Error {
-  code?: string;
-  constructor(e: SerializedError) {
-    super(e.message);
-    this.name = e.name;
-    this.code = e.code;
-  }
-}
-
-/** The one error-marshalling implementation; pair with `new RpcError(...)`. */
-export function serializeError(err: unknown): SerializedError {
-  if (err instanceof Error) {
-    const code = (err as { code?: unknown }).code;
-    return {
-      name: err.name,
-      message: err.message,
-      ...(typeof code === "string" ? { code } : {}),
-    };
-  }
-  return { name: "Error", message: String(err) };
-}
 
 export class Rpc {
   #port: PortLike;

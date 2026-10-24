@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CallQueue } from "../src/host/call-queue.js";
+import { CallQueue } from "../src/call-queue.js";
 
 test("delivers queued items in FIFO order", async () => {
   const q = new CallQueue<number>();

@@ -13,13 +13,10 @@
 // has no network, no filesystem and no syscalls — so every capability is
 // something this file decides to install. `fetch` included.
 
-import { CallQueue } from "./call-queue.js";
-import { LogQueue } from "./log-queue.js";
 import { spawnIsolate, type IsolateLimits, type SpawnedIsolate } from "./isolation.js";
 import { installSocketBridge } from "./socket-bridge-host.js";
 import { installFetchBridge } from "./fetch-bridge-host.js";
 import type { AddressPolicy } from "./address-policy.js";
-import { fetchAndVerifyBundle, readSpecifier } from "./specifier.js";
 import { Rpc, RpcError, abortError, type PortLike } from "../protocol.js";
 import type { GuestPayload, GuestReply } from "../child/isolate-thread.js";
 import type {
@@ -30,7 +27,14 @@ import type {
   LogEntry,
   WorkerInit,
 } from "../spec-types.js";
-import { encodePlain, type WirePlain } from "../plain-value.js";
+import {
+  CallQueue,
+  LogQueue,
+  encodePlain,
+  fetchAndVerifyBundle,
+  readSpecifier,
+  type WirePlain,
+} from "@anon-rpc/harness-core";
 
 /** §13.1 retention bound; see the browser harness for the sizing note. */
 const LOG_RETENTION = 1000;

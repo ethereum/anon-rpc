@@ -4,7 +4,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { LogQueue } from "../src/host/log-queue.js";
+import { LogQueue } from "../src/log-queue.js";
 
 test("delivers entries in the order they were produced (§13.1)", async () => {
   const q = new LogQueue<number>(10);

@@ -29,7 +29,7 @@ const out = await build({
 });
 const tmp = resolve(HERE, ".wire.built.mjs");
 await writeFile(tmp, out.outputFiles[0].text);
-const { toB64, fromB64, toWireError, encodePlain, decodePlain, copyPlain, plainKey } = await import(tmp);
+const { toB64, fromB64, toWireError, encodePlain, plainKey } = await import(tmp);
 // rmSync, not the promise version: an `exit` handler runs to completion
 // synchronously and nothing async in it ever finishes, so the async form
 // leaves the artifact behind — and then someone commits it.
@@ -91,48 +91,8 @@ test("error codes cross intact so a host can branch on them (§12)", () => {
   });
 });
 
-// §9.4 over a JSON hop: every plain value must arrive as itself. JSON.parse
-// (JSON.stringify(...)) stands in for extension messaging.
-const viaJson = (v) => decodePlain(JSON.parse(JSON.stringify(encodePlain(v))));
-
-test("plain values survive JSON exactly, including what JSON loses", () => {
-  for (const n of [NaN, Infinity, -Infinity, -0, 0, 1.5]) assert.ok(Object.is(viaJson(n), n), String(n));
-  assert.equal(viaJson(undefined), undefined);
-  const obj = viaJson({ a: undefined, b: [1, undefined, null], s: "x" });
-  assert.ok("a" in obj && obj.a === undefined, "undefined property stays present");
-  assert.deepEqual(obj.b, [1, undefined, null]);
-  const bytes = viaJson({ u8: new Uint8Array([1, 2, 255]), ab: new Uint8Array([3]).buffer, empty: new Uint8Array(0) });
-  assert.ok(bytes.u8 instanceof Uint8Array);
-  assert.deepEqual([...bytes.u8], [1, 2, 255]);
-  assert.ok(bytes.ab instanceof ArrayBuffer && !(bytes.ab instanceof Uint8Array));
-  assert.deepEqual([...new Uint8Array(bytes.ab)], [3]);
-  assert.equal(bytes.empty.byteLength, 0);
-});
-
-test('a "__proto__" key crosses as an own property', () => {
-  const out = viaJson(JSON.parse('{"__proto__": {"polluted": true}}'));
-  assert.equal(Object.getPrototypeOf(out), Object.prototype);
-  assert.ok(Object.hasOwn(out, "__proto__"));
-  assert.equal(out.polluted, undefined);
-});
-
-test("holes become undefined; a value reachable twice is copied twice", () => {
-  const shared = { x: 1 };
-  // eslint-disable-next-line no-sparse-arrays
-  const out = copyPlain({ arr: [1, , 3], a: shared, b: shared });
-  assert.ok(1 in out.arr);
-  assert.notEqual(out.a, out.b);
-});
-
-test("non-plain values and cycles fail with a TypeError naming the path", () => {
-  for (const v of [1n, Symbol("s"), () => {}, new Date(), new Map(), new Uint16Array(1), new (class Foo {})()]) {
-    assert.throws(() => encodePlain({ k: [v] }, "config"), { name: "TypeError", message: /^config\.k\[0\] is not a plain value/ });
-  }
-  const cyclic = {};
-  cyclic.self = cyclic;
-  assert.throws(() => encodePlain(cyclic, "config"), { name: "TypeError", message: /config\.self .*contains itself/ });
-});
-
+// The plain-value codec itself is tested in harness-core; what is this hop's
+// own is the cache key built from it.
 test("plainKey ignores key order but keeps distinctions JSON would erase", () => {
   assert.equal(plainKey(encodePlain({ a: 1, b: 2 })), plainKey(encodePlain({ b: 2, a: 1 })));
   assert.notEqual(plainKey(encodePlain({ a: NaN })), plainKey(encodePlain({ a: null })));

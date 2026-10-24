@@ -34,7 +34,7 @@ import {
 } from "../wire.js";
 import { ASSET_PATH, assertAssetPresent } from "./assets.js";
 import { resolveIframeUrl } from "../iframe-url.js";
-import { LogQueue } from "./log-queue.js";
+import { LogQueue } from "@anon-rpc/harness-core";
 
 /** §13.1 retention bound; see the browser harness for the sizing note. */
 const LOG_RETENTION = 1000;

@@ -2,7 +2,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { copyPlainValue } from "../src/plain-value.js";
+import { copyPlainValue, decodePlain, encodePlain } from "../src/plain-value.js";
 import type { AnonFetch } from "../src/spec-types.js";
 
 // §9.1: AnonFetch must stay usable wherever a plain fetch is expected.
@@ -141,4 +141,47 @@ test("everything else is refused with a TypeError naming the path", () => {
       message: /^init\.x\.deep\[0\] is not a plain value/,
     }, label);
   }
+});
+
+// encodePlain/decodePlain: a JSON-only hop (extension messaging, the QuickJS
+// guest) must deliver every plain value as itself. JSON.parse(JSON.stringify())
+// stands in for the hop.
+const viaJson = (v: unknown): any => decodePlain(JSON.parse(JSON.stringify(encodePlain(v))));
+
+test("plain values survive JSON exactly, including what JSON loses", () => {
+  for (const n of [NaN, Infinity, -Infinity, -0, 0, 1.5]) assert.ok(Object.is(viaJson(n), n), String(n));
+  assert.equal(viaJson(undefined), undefined);
+  const obj = viaJson({ a: undefined, b: [1, undefined, null], s: "x" });
+  assert.ok("a" in obj && obj.a === undefined, "undefined property stays present");
+  assert.deepEqual(obj.b, [1, undefined, null]);
+  const bytes = viaJson({ u8: new Uint8Array([1, 2, 255]), ab: new Uint8Array([3]).buffer, empty: new Uint8Array(0) });
+  assert.ok(bytes.u8 instanceof Uint8Array);
+  assert.deepEqual([...bytes.u8], [1, 2, 255]);
+  assert.ok(bytes.ab instanceof ArrayBuffer && !(bytes.ab instanceof Uint8Array));
+  assert.deepEqual([...new Uint8Array(bytes.ab)], [3]);
+  assert.equal(bytes.empty.byteLength, 0);
+});
+
+test('a "__proto__" key crosses as an own property', () => {
+  const out = viaJson(JSON.parse('{"__proto__": {"polluted": true}}'));
+  assert.equal(Object.getPrototypeOf(out), Object.prototype);
+  assert.ok(Object.hasOwn(out, "__proto__"));
+  assert.equal(out.polluted, undefined);
+});
+
+test("holes become undefined; a value reachable twice is copied twice", () => {
+  const shared = { x: 1 };
+  // eslint-disable-next-line no-sparse-arrays
+  const out = copyPlainValue({ arr: [1, , 3], a: shared, b: shared }) as any;
+  assert.ok(1 in out.arr);
+  assert.notEqual(out.a, out.b);
+});
+
+test("non-plain values and cycles fail with a TypeError naming the path", () => {
+  for (const v of [1n, Symbol("s"), () => {}, new Date(), new Map(), new Uint16Array(1), new (class Foo {})()]) {
+    assert.throws(() => encodePlain({ k: [v] }, "config"), { name: "TypeError", message: /^config\.k\[0\] is not a plain value/ });
+  }
+  const cyclic: Record<string, unknown> = {};
+  cyclic.self = cyclic;
+  assert.throws(() => encodePlain(cyclic, "config"), { name: "TypeError", message: /config\.self .*contains itself/ });
 });

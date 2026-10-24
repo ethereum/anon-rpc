@@ -6,13 +6,18 @@
 
 import type { WorkerInit, AnonFetch, AnonFetchResponse, LogEntry, PlainValue } from "../spec-types.js";
 import { PortRpc, RpcError, type SerializedError } from "../protocol.js";
-import { readSpecifier, fetchAndVerifyBundle } from "./specifier.js";
 import { registerKpsBridge } from "./kps-bridge-host.js";
-import { CallQueue } from "./call-queue.js";
-import { LogQueue } from "./log-queue.js";
 import { normalizeRequest, type WireRequestInit } from "./normalize-request.js";
 import { openStorageBackend, type StorageBackend } from "./idb-storage.js";
-import { copyPlainValue } from "../plain-value.js";
+import {
+  CallQueue,
+  LogQueue,
+  copyPlainValue,
+  fetchAndVerifyBundle,
+  readSpecifier,
+  MAX_BUNDLE_BYTES,
+} from "@anon-rpc/harness-core";
+import { kpsResolverKind } from "./kps-http.js";
 
 // Injected at build time (see build.mjs): source text the null-origin iframe
 // blob-spawns, since an opaque-origin iframe cannot load host-origin scripts.
@@ -111,7 +116,7 @@ export class AnonRpcWorker {
     if (!provider) throw new Error("preExisting.rpcProvider is required to read the specifier");
 
     const spec = await readSpecifier(provider, this.#init.address);
-    const bundleBytes = await fetchAndVerifyBundle(spec);
+    const bundleBytes = await fetchAndVerifyBundle(spec, MAX_BUNDLE_BYTES, [kpsResolverKind]);
 
     const channel = new MessageChannel();
     const rpc = new PortRpc(channel.port1);

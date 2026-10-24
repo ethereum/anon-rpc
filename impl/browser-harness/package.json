@@ -48,6 +48,7 @@
     "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
+    "@anon-rpc/harness-core": "0.4.0",
     "@kpstreams/webrtc-client": "^0.2.1",
     "@noble/hashes": "^1.5.0"
   },

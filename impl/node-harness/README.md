@@ -357,7 +357,7 @@ Working, and deliberately incomplete. What a §3.1 conforming harness still owes
 | §5 | `AnonRpcWorker`, `ready`, `fetch`, `close` | **done** |
 | §6 | isolation | **done**, portable; no clause in the spec yet |
 | §7 | `config`, `signalReady`/`signalFailed`, `log` | **done** |
-| §8 | ordered, buffered, one-at-a-time calls | **done** (shares `CallQueue` with the browser harness) |
+| §8 | ordered, buffered, one-at-a-time calls | **done** (`CallQueue` from `@anon-rpc/harness-core`, shared with the browser harness) |
 | §9 | fetch payloads | bodies **buffered**, not streamed — see below; forwarded init entries and §9.4 plain values **done** |
 | §10 | KPS | **stubs** that throw `unsupported` (§12) |
 | §11 | storage | **stubs** that throw `unsupported` (§12) |

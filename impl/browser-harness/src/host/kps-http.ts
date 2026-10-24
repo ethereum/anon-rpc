@@ -7,6 +7,8 @@
 // fetchBundleOverKps touches the WebRTC client, via dynamic import so this
 // module stays loadable outside a browser.
 
+import type { ResolverKind } from "@anon-rpc/harness-core";
+
 const enc = new TextEncoder();
 const CRLF = "\r\n";
 
@@ -223,3 +225,12 @@ export async function fetchBundleOverKps(
     await stream.close().catch(() => {});
   }
 }
+
+/** `kps:` entries, for harness-core's §4 fetch: this harness has the transport. */
+export const kpsResolverKind: ResolverKind = {
+  matches: (url) => url.startsWith("kps:"),
+  fetch: (url, maxBytes) => {
+    const { addr, path } = parseKpsResolver(url)!;
+    return fetchBundleOverKps(addr, path, maxBytes);
+  },
+};

@@ -774,7 +774,8 @@
 
   /* --- §9.4 plain values ------------------------------------------------- */
 
-  // The inverse of the host's encodePlain (src/plain-value.ts): `config` and
+  // The inverse of harness-core's encodePlain (its plain-value.ts defines the
+  // format; a change there is a change here): `config` and
   // forwarded fetch-init entries arrive tagged, because JSON alone would lose
   // undefined, NaN, ±Infinity, -0 and bytes. Keys are defined, not assigned,
   // so a "__proto__" key stays an own property.
