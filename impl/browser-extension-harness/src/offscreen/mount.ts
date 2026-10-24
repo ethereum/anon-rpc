@@ -24,14 +24,16 @@ import { AnonRpcWorker } from "@anon-rpc/browser-harness";
 import type { RpcProvider } from "@anon-rpc/browser-harness";
 import {
   PORT_NAME,
+  decodePlain,
   fromB64,
-  toB64,
+  plainKey,
   toWireError,
   type FromOffscreen,
   type ToOffscreen,
 } from "../wire.js";
 
 import { chromeApi, type RuntimePort } from "../chrome-types.js";
+import { BodyStreams } from "../body-stream.js";
 
 type Entry = {
   worker: AnonRpcWorker;
@@ -104,12 +106,15 @@ function serve(port: RuntimePort, cache: Map<string, Entry>, idleMs: number): vo
   let key: string | undefined;
   let closed = false;
   const inFlight = new Map<number, AbortController>();
+  // §9 bodies crossing this connection, both directions (body-stream.ts).
+  const bodies = new BodyStreams(send);
 
   const detach = () => {
     if (closed) return;
     closed = true;
     for (const ac of inFlight.values()) ac.abort();
     inFlight.clear();
+    bodies.closeAll(new Error("service worker disconnected"));
     for (const p of providerCalls.values()) p.reject(new Error("service worker disconnected"));
     providerCalls.clear();
     if (!entry || !key) return;
@@ -135,6 +140,7 @@ function serve(port: RuntimePort, cache: Map<string, Entry>, idleMs: number): vo
 
   port.onMessage.addListener((raw) => {
     const msg = raw as ToOffscreen;
+    if (bodies.route(msg)) return;
     switch (msg?.t) {
       case "boot": {
         // A distinct config is a distinct worker: §7.1 fixes config for the
@@ -143,7 +149,7 @@ function serve(port: RuntimePort, cache: Map<string, Entry>, idleMs: number): vo
         // constructed, and leaving it out meant a caller asking for a
         // different isolation document silently got a worker built with the
         // previous one.
-        const cacheKey = `${msg.address.toLowerCase()}::${msg.iframeUrl}::${stableStringify(msg.config)}`;
+        const cacheKey = `${msg.address.toLowerCase()}::${msg.iframeUrl}::${plainKey(msg.config)}`;
         key = cacheKey;
         const hit = msg.reuse ? cache.get(cacheKey) : undefined;
         if (hit) {
@@ -155,7 +161,7 @@ function serve(port: RuntimePort, cache: Map<string, Entry>, idleMs: number): vo
           cache.get(cacheKey)?.worker.close(); // a re-boot replaces any existing one
           const worker = new AnonRpcWorker({
             address: msg.address,
-            config: msg.config,
+            config: decodePlain(msg.config),
             preExisting: { rpcProvider: provider },
             iframeUrl: msg.iframeUrl,
           });
@@ -188,9 +194,13 @@ function serve(port: RuntimePort, cache: Map<string, Entry>, idleMs: number): vo
         }
         const ac = new AbortController();
         inFlight.set(msg.callId, ac);
-        const body = fromB64(msg.body);
+        // A stream body is pulled from the service worker as the worker reads
+        // it; anything else arrived whole.
+        const body = msg.bodyStream ? bodies.receive("request", msg.callId).stream : fromB64(msg.body);
         void entry.worker
           .fetch(msg.url, {
+            // §9.1 forwarded entries first: none of them is a modeled key.
+            ...(msg.forwarded ? (decodePlain(msg.forwarded) as object) : {}),
             method: msg.request.method,
             headers: msg.request.headers,
             ...(body ? { body: body as BodyInit } : {}),
@@ -198,11 +208,12 @@ function serve(port: RuntimePort, cache: Map<string, Entry>, idleMs: number): vo
             signal: ac.signal,
           })
           .then(
-            async (res) => {
-              const bytes = new Uint8Array(await res.arrayBuffer());
+            (res) => {
               const headers: [string, string][] = [];
               res.headers.forEach((v, k2) => headers.push([k2, v]));
-              inFlight.delete(msg.callId);
+              // Headers now, body as the service worker pulls it. inFlight
+              // keeps the controller until the body is done, so an abort that
+              // arrives mid-body still reaches the worker.
               send({
                 t: "response",
                 callId: msg.callId,
@@ -210,11 +221,17 @@ function serve(port: RuntimePort, cache: Map<string, Entry>, idleMs: number): vo
                 status: res.status,
                 headers,
                 url: res.url || undefined,
-                body: toB64(bytes),
+                hasBody: res.body !== null,
               });
+              if (!res.body) {
+                inFlight.delete(msg.callId);
+                return;
+              }
+              bodies.send("response", msg.callId, res.body, () => inFlight.delete(msg.callId));
             },
             (e) => {
               inFlight.delete(msg.callId);
+              bodies.abort(msg.callId, e); // a request body the worker never finished reading
               send({ t: "response", callId: msg.callId, ok: false, error: toWireError(e) });
             },
           );
@@ -224,6 +241,7 @@ function serve(port: RuntimePort, cache: Map<string, Entry>, idleMs: number): vo
       case "abort":
         inFlight.get(msg.callId)?.abort();
         inFlight.delete(msg.callId);
+        bodies.abort(msg.callId, new DOMException("aborted", "AbortError"));
         return;
 
       case "provider.result": {
@@ -304,19 +322,4 @@ function renderLogArg(a: unknown): string {
   } catch {
     return String(a);
   }
-}
-
-/**
- * Key-order-independent JSON, so `{a:1,b:2}` and `{b:2,a:1}` are one cache
- * entry. Two structurally identical configs producing two workers would be a
- * silent doubling of everything the harness does.
- */
-function stableStringify(v: unknown): string {
-  if (v === undefined) return " undefined";
-  return JSON.stringify(v, (_k, val) => {
-    if (val && typeof val === "object" && !Array.isArray(val)) {
-      return Object.fromEntries(Object.entries(val as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : 1)));
-    }
-    return val;
-  });
 }

@@ -772,6 +772,48 @@
     trace: logAt("debug"),
   };
 
+  /* --- §9.4 plain values ------------------------------------------------- */
+
+  // The inverse of harness-core's encodePlain (its plain-value.ts defines the
+  // format; a change there is a change here): `config` and
+  // forwarded fetch-init entries arrive tagged, because JSON alone would lose
+  // undefined, NaN, ±Infinity, -0 and bytes. Keys are defined, not assigned,
+  // so a "__proto__" key stays an own property.
+  function decodePlain(w) {
+    if (!Array.isArray(w)) return w;
+    switch (w[0]) {
+      case "u":
+        return undefined;
+      case "n":
+        return Number(w[1]); // "-0" parses to -0
+      case "b":
+        return fromHex(w[1]);
+      case "ab":
+        return fromHex(w[1]).buffer;
+      case "a":
+        return w.slice(1).map(decodePlain);
+      case "o": {
+        const out = {};
+        for (let i = 1; i < w.length; i += 2) {
+          Object.defineProperty(out, w[i], {
+            value: decodePlain(w[i + 1]),
+            writable: true,
+            enumerable: true,
+            configurable: true,
+          });
+        }
+        return out;
+      }
+    }
+    throw new TypeError("malformed plain value from host");
+  }
+
+  function fromHex(hex) {
+    const out = new Uint8Array(hex.length >> 1);
+    for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.substr(i * 2, 2), 16);
+    return out;
+  }
+
   /* --- §7 capability API -------------------------------------------------- */
 
   function unsupported(what) {
@@ -907,7 +949,7 @@
   const inFlight = new Map();
 
   const anonRpcWorker = {
-    config: capabilities.config,
+    config: decodePlain(capabilities.config),
     kps,
     storage,
     log: {
@@ -948,7 +990,11 @@
       const ac = new AbortController();
       inFlight.set(accepted.id, ac);
 
-      const requestInit = Object.assign({}, accepted.requestInit || {}, { signal: ac.signal });
+      // §9.1: forwarded entries sit beside the modeled fields, under their own
+      // keys (the host never forwards a modeled one). Spread defines rather
+      // than assigns, so a forwarded "__proto__" stays an own key.
+      const { forwarded, ...modeled } = accepted.requestInit || {};
+      const requestInit = { ...(forwarded ? decodePlain(forwarded) : {}), ...modeled, signal: ac.signal };
       if (reply.bytes && reply.bytes.length) requestInit.body = reply.bytes;
 
       return {

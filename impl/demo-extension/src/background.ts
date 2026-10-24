@@ -18,7 +18,7 @@
 // called, the bundle was re-fetched and re-verified. If it was not, the
 // offscreen document handed back the worker it already had.
 
-import { AnonRpcWorker } from "@anon-rpc/browser-extension-harness";
+import { AnonRpcWorker, type PlainValue } from "@anon-rpc/browser-extension-harness";
 import { CHAINS, PRESETS } from "./presets.js";
 
 declare const chrome: {
@@ -259,10 +259,10 @@ async function ensureWorker(s: Settings): Promise<{ worker: AnonRpcWorker; bootM
  * the field is worker-defined and the harness passes it through untouched, so
  * JSON validity is all that is checked. Blank means no config at all, not `{}`.
  */
-function parseConfig(text: string): unknown {
+function parseConfig(text: string): PlainValue {
   if (!text.trim()) return undefined;
   try {
-    return JSON.parse(text);
+    return JSON.parse(text) as PlainValue; // JSON is always a §9.4 plain value
   } catch (e) {
     throw new Error(`config must be valid JSON: ${(e as Error).message}`);
   }

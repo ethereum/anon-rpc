@@ -3,14 +3,21 @@
 // Reads an on-chain IWorkerSpecifier (workerHash() / workerResolvers()) through
 // a pre-existing RPC provider, fetches the bundle bytes from a resolver, and
 // verifies keccak256(bytes) == workerHash. The hash is trust; the URL is not.
-//
-// Copied from the browser harness, minus its `kps:` resolver support (§4.2),
-// which needs a KPS transport this harness does not have yet. §4 is entirely
-// platform-neutral — chain read, byte fetch, hash compare — so the two
-// implementations agreeing here is a property worth keeping, not a smell.
 
 import { keccak_256 } from "@noble/hashes/sha3";
-import type { RpcProvider } from "../spec-types.js";
+import type { RpcProvider } from "./spec-types.js";
+import { toHex } from "./hex.js";
+
+/**
+ * A §4.1 resolver entry kind that needs a transport this module does not have
+ * — `kps:`, which needs KPS (§4.2). A harness that has the transport passes
+ * one; one that does not leaves the kind unrecognized, which §4.1 says to
+ * ignore, so a specifier listing both kinds still boots from the other.
+ */
+export type ResolverKind = {
+  matches(url: string): boolean;
+  fetch(url: string, maxBytes: number): Promise<Uint8Array>;
+};
 
 const SEL_WORKER_HASH = selector("workerHash()");
 const SEL_WORKER_RESOLVERS = selector("workerResolvers()");
@@ -19,11 +26,7 @@ function selector(sig: string): string {
   return "0x" + toHex(keccak_256(new TextEncoder().encode(sig))).slice(0, 8);
 }
 
-export function toHex(bytes: Uint8Array): string {
-  let s = "";
-  for (const b of bytes) s += b.toString(16).padStart(2, "0");
-  return s;
-}
+export { toHex };
 
 function hexToBytes(hex: string): Uint8Array {
   const h = hex.startsWith("0x") ? hex.slice(2) : hex;
@@ -95,25 +98,31 @@ async function readBodyCapped(resp: Response, cap: number): Promise<Uint8Array> 
 export async function fetchAndVerifyBundle(
   spec: Specifier,
   maxBytes = MAX_BUNDLE_BYTES,
+  kinds: ResolverKind[] = [],
 ): Promise<Uint8Array> {
   const errors: string[] = [];
   for (const url of spec.resolvers) {
     let bytes: Uint8Array;
     try {
       // §4.1 entry kinds. `http:` is accepted alongside `https:` as a
-      // development affordance (local resolvers in tests and demos).
-      if (/^https?:\/\//.test(url)) {
+      // development affordance (local resolvers in tests and demos), and
+      // `blob:` because §4.1 lists it: bytes this program already holds,
+      // for a specifier the host built locally. Fetched here, in the HOST
+      // context that minted it — the worker never sees the URL, and would
+      // not be able to resolve it if it did.
+      if (/^(https?|blob):/.test(url)) {
         const resp = await fetch(url);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         bytes = await readBodyCapped(resp, maxBytes);
       } else {
-        // §4.1: `kps:` entries land here for now. Ignoring an entry kind the
-        // harness cannot serve is exactly what §4.1 prescribes, so a specifier
-        // listing both kinds still boots — it just falls through to https.
-        // §4.1: unrecognized entry kinds MUST be ignored — they never fail
-        // the boot; recorded only for the all-resolvers-failed diagnostic.
-        errors.push(`${url}: unrecognized resolver kind (ignored)`);
-        continue;
+        const kind = kinds.find((k) => k.matches(url));
+        if (!kind) {
+          // §4.1: unrecognized entry kinds MUST be ignored — they never fail
+          // the boot; recorded only for the all-resolvers-failed diagnostic.
+          errors.push(`${url}: unrecognized resolver kind (ignored)`);
+          continue;
+        }
+        bytes = await kind.fetch(url, maxBytes);
       }
     } catch (e) {
       errors.push(`${url}: ${(e as Error).message}`);

@@ -78,6 +78,17 @@ them.
 accepts a custom `fetch` or transport (a viem custom transport, an ethers
 `FetchRequest` getUrl hook, your own JSON-RPC wrapper).
 
+## Per-call options
+
+`anonOptions` passes options to the worker rather than the destination:
+
+```ts
+await worker.fetch(url, { method: "POST", body, anonOptions: { isolationKey: accountId } });
+```
+
+`isolationKey` asks that calls under different keys not be linkable to one
+another — e.g. one key per account. Support varies - check what your network does with this key if it's important to you.
+
 ## What happens when you construct the worker
 
 1. The harness calls `workerHash()` and `workerResolvers()` on the specifier

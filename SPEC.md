@@ -1,8 +1,8 @@
 # anon-rpc Specification
 
 - **Status:** Draft
-- **Version:** 0.3.2
-- **Date:** 2026-09-25
+- **Version:** 0.4.0
+- **Date:** 2026-10-23
 
 This document is the normative specification for **anon-rpc**, a standard that lets a wallet or application make anonymized RPC requests by running hash-pinned client code inside a sandboxed worker, and granting that code a small, explicit, transport-neutral capability API.
 
@@ -151,11 +151,12 @@ export class AnonRpcWorker {
   // Rejects when the worker cannot be started or has failed (see below).
   ready: Promise<void>;
 
-  // Implements the web's fetch API. This field MUST be this-bound; it MUST work
-  // normally when used as a free function. This means a function accepting
-  // fetch as a parameter can accept it as `useFetch(worker.fetch)` and not
-  // require `useFetch(worker.fetch.bind(worker))`.
-  fetch: typeof fetch;
+  // Implements the web's fetch API, with the init extensions of §9.1. This
+  // field MUST be this-bound; it MUST work normally when used as a free
+  // function. This means a function accepting fetch as a parameter can accept
+  // it as `useFetch(worker.fetch)` and not require
+  // `useFetch(worker.fetch.bind(worker))`.
+  fetch: AnonFetch;
 
   // Resolves with the next log entry the worker has produced (§13), waiting
   // for one if none is retained. The host pulls; the harness never pushes.
@@ -178,7 +179,7 @@ export type WorkerInit = {
 
   // Delivered to the worker as `anonRpcWorker.config` (§7). Opaque to the
   // harness; its meaning is defined by the worker.
-  config?: unknown;
+  config?: PlainValue;
 
   // Where a browser harness loads its null-origin document from, for an
   // embedder whose Content Security Policy will not let the harness construct
@@ -231,7 +232,7 @@ export type AnonRpcWorkerApi = {
   signalReady(): void;
   signalFailed(reason?: { code?: string; message?: string }): void;
   acceptCall(opts?: { signal?: AbortSignal }): Promise<IncomingCall>;
-  config: unknown;
+  config: PlainValue;
   kps: KpsApi;
   storage: StorageApi;
   log: LogApi;
@@ -250,7 +251,7 @@ The worker MAY call `signalFailed(reason?)` — before `signalReady()`, to repor
 
 `config` carries the host's `WorkerInit.config` (§5) to the worker:
 
-- The value MUST be structured-cloneable; the harness MUST deliver an equivalent value (as by the structured clone algorithm) to the worker.
+- The value MUST be a plain value (§9.4), copied as §9.4 describes. If it is not, the `AnonRpcWorker` constructor MUST throw a `TypeError`.
 - The harness MUST treat config as opaque: it MUST NOT interpret it or alter its behaviour based on it. Its schema is defined by the worker.
 - `config` MUST be available from the worker's first instruction (before `signalReady()`), and MUST NOT change for the lifetime of the worker. The worker receives a copy: mutating it MUST NOT affect the host's value.
 - When the host supplies no config, `config` MUST be `undefined`.
@@ -291,12 +292,27 @@ export type AnonRequestInit = {
   body?: ByteBody;
   redirect?: "follow" | "manual" | "error";  // defaults to "follow"
   signal?: AbortSignal;
+  anonOptions?: AnonOptions;            // §9.3
+  [key: string]: unknown;               // forwarded entries, below
 };
+
+// The host-side fetch (§5). Assignable to `typeof fetch`.
+export type AnonFetch = (
+  input: RequestInfo | URL,
+  init?: RequestInit & { anonOptions?: AnonOptions },
+) => Promise<Response>;
 ```
 
 - `HeaderList` preserves header order and duplicates.
 - A `ByteBody` that is a `ReadableStream<Uint8Array>` is single-consumption, applies normal stream backpressure, and MUST error if the underlying transfer fails or `signal` aborts.
 - `signal`, when supplied, aborts the in-flight call (as in `fetch(url, { signal })`).
+
+The harness builds `method`, `headers`, `body`, `redirect` and `signal` from the host's `input` and `init` as above. Every other own enumerable string-keyed entry of the host's `init` — `anonOptions`, standard fetch fields this section does not model (`cache`, `credentials`, `priority`, …), and keys the harness does not recognize — is a **forwarded entry**:
+
+- The harness MUST deliver each forwarded entry in `requestInit` under the same key, its value copied as a plain value (§9.4).
+- If any forwarded entry's value is not a plain value, the host's `fetch` MUST reject with a `TypeError` and the call MUST NOT be delivered. The harness MUST NOT drop the entry and deliver the rest: an option lost without an error is worse than a failed call.
+- Values are copied when `fetch` is called; a later mutation by the host MUST NOT affect the delivered call.
+- When `input` is a `Request`, only `init` contributes forwarded entries.
 
 ### 9.2 Responses
 
@@ -310,6 +326,44 @@ export type AnonFetchResponse = {
 ```
 
 - When `body` is a streaming `ByteBody`, the call is **not complete** until the body stream closes or errors; `respond()` returning does not mark completion. A harness MUST keep the transfer alive until the body is fully drained or aborted.
+
+### 9.3 Anon options
+
+`anonOptions` is addressed to the worker, not the destination: it says how a call should be carried. The harness forwards it as a whole (§9.1), including keys it does not recognize, so a harness written against an earlier version of this specification still delivers options defined later.
+
+```ts
+export type AnonOptions = {
+  isolationKey?: string;
+  [key: string]: PlainValue;  // reserved for future versions of this specification
+};
+```
+
+`isolationKey` expresses the host's intent that calls made under different keys not be linkable to one another — that they appear as if made by unrelated clients. Calls without an `isolationKey` are treated as sharing one further key, distinct from every other. Calls under the same key carry no such intent.
+
+Whether and how a worker acts on this intent, and how much separation it achieves, is up to the worker.
+
+### 9.4 Plain values
+
+A **plain value** is one that crosses any harness boundary — `postMessage`, an interpreter such as QuickJS, a process boundary — with the same result. It is one of:
+
+```ts
+export type PlainValue =
+  | undefined | null | boolean | number | string
+  | Uint8Array | ArrayBuffer
+  | PlainValue[]
+  | { [key: string]: PlainValue };
+```
+
+with these rules, which a harness MUST apply when copying:
+
+- **Numbers** are delivered exactly, including `NaN`, `±Infinity` and `-0`.
+- **`Uint8Array`**, including subclasses (e.g. Node's `Buffer`), is delivered as a plain `Uint8Array` holding only the bytes of the view. **`ArrayBuffer`** is delivered as a new, non-resizable `ArrayBuffer` holding its bytes. `SharedArrayBuffer`, detached buffers, other typed arrays and `DataView` are not plain values.
+- **Arrays** are delivered with the same length; holes and `undefined` elements are delivered as `undefined`. Non-index properties are not copied.
+- **Objects** MUST have `Object.prototype` or `null` as their prototype. Only own enumerable string-keyed properties are copied, each delivered as an own data property of an ordinary object (so a `"__proto__"` key never sets a prototype). A property whose value is `undefined` is delivered as a property whose value is `undefined`.
+- Plain values are not recursive: a value that contains itself is not a plain value, and a harness MUST detect it and reject it rather than loop or exhaust its stack. A value reachable more than once without a cycle is delivered as independent copies.
+- Anything else — functions, symbols, `BigInt`, `Date`, `Map`, `Blob`, class instances — is not a plain value.
+
+Wherever this specification requires a plain value, a value that is not one MUST be rejected with a `TypeError`. A harness MAY likewise reject plain values that exceed implementation-defined bounds on size or nesting depth.
 
 ## 10. KPS transport
 

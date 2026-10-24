@@ -2,7 +2,7 @@
 // user-supplied specifier contract and polls an address's ETH balance through
 // the sandboxed worker's anonymized fetch.
 
-import { AnonRpcWorker } from "@anon-rpc/browser-harness";
+import { AnonRpcWorker, type PlainValue } from "@anon-rpc/browser-harness";
 import { keccak_256 } from "@noble/hashes/sha3";
 import adoptersFile from "../../../../adopters.json5";
 
@@ -714,10 +714,10 @@ function validate(): Settings {
  * untouched — so JSON validity is the only thing checked here. Blank means the
  * worker is started with no config at all, not with an empty object.
  */
-function parseConfig(text: string): unknown {
+function parseConfig(text: string): PlainValue {
   if (!text.trim()) return undefined;
   try {
-    return JSON.parse(text);
+    return JSON.parse(text) as PlainValue; // JSON is always a §9.4 plain value
   } catch (e) {
     throw new Error(`config must be valid JSON: ${(e as Error).message}`);
   }

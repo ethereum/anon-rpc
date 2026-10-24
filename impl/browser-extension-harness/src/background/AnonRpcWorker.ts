@@ -17,14 +17,14 @@
 // offscreen document's own prebuilt script also contains — so a Chromium build
 // carries it twice, roughly 18 KB gzipped, in exchange for one API.
 
-import type { LogEntry } from "@anon-rpc/browser-harness";
+import type { AnonFetch, LogEntry } from "@anon-rpc/browser-harness";
 import { chromeApi } from "../chrome-types.js";
 import { PageWorker } from "../page/PageWorker.js";
 import { OffscreenWorker, type ExtensionWorkerInit } from "./OffscreenWorker.js";
 
 export class AnonRpcWorker {
   readonly ready: Promise<void>;
-  fetch: typeof fetch;
+  fetch: AnonFetch;
 
   #impl: OffscreenWorker | PageWorker;
 

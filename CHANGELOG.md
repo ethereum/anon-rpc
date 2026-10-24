@@ -2,6 +2,14 @@
 
 Changes to [SPEC.md](SPEC.md) by specification version.
 
+## 0.4.0 — 2026-10-23
+
+- §5, §9.1: entries of the host's fetch `init` that §9.1 does not model are forwarded to the worker in `requestInit` rather than dropped, giving workers a way to accept per-call options. Values must be plain values (§9.4), or the host's `fetch` rejects with `TypeError` — a dropped option would fail silently. `fetch` is typed `AnonFetch`, which accepts these entries and remains assignable to `typeof fetch`.
+- §9.3: `anonOptions`, a namespace of per-call options defined only by this specification, forwarded as a whole so older harnesses carry options defined later. First option: `isolationKey` — the host's intent that calls under different keys not be linkable to one another, as if made by unrelated clients; how a worker acts on it is up to the worker.
+- §9.4: plain values — JSON values plus `undefined`, `Uint8Array` and `ArrayBuffer`, with copying rules precise enough that a `postMessage` harness and an interpreter-based one (QuickJS) deliver the same thing. Cyclic values are rejected with `TypeError`.
+- §5, §7.1: `WorkerInit.config` is a plain value rather than any structured-cloneable value, so every harness can deliver it identically; the constructor throws `TypeError` otherwise. This narrows what a host may pass — `Date`, `Map`, class instances and the like are no longer accepted.
+- Breaking for hosts that pass non-plain config. Additive for workers. Harness implementers: request normalization must forward and validate these entries.
+
 ## 0.3.2 — 2026-09-25
 
 - §4.1: `blob:` URLs are a recognized resolver kind, as browsers define the scheme (and as an equivalent platform defines its own). Such an entry denotes bytes held by one running program, so it cannot appear usefully in a deployed contract; it exists for a host that builds a specifier locally around bytes it already has — a developer running an unpublished worker. Verification is untouched: the pinned hash is still the identity and the bytes are still checked against it. Additive.

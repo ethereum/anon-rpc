@@ -1,6 +1,6 @@
 {
   "name": "@anon-rpc/browser-harness",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "description": "anon-rpc browser harness: loads a hash-pinned anon-client worker under null-origin iframe isolation and exposes an anonymized fetch (SPEC \u00a73.1 conformance target).",
   "license": "MIT",
   "type": "module",
@@ -48,6 +48,7 @@
     "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
+    "@anon-rpc/harness-core": "0.4.0",
     "@kpstreams/webrtc-client": "^0.2.1",
     "@noble/hashes": "^1.5.0"
   },

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { keccak_256 } from "@noble/hashes/sha3";
-import { readSpecifier, fetchAndVerifyBundle, toHex, MAX_BUNDLE_BYTES } from "../src/host/specifier.js";
+import { readSpecifier, fetchAndVerifyBundle, toHex, MAX_BUNDLE_BYTES } from "../src/specifier.js";
 
 /* ABI encoders mirroring the decoders under test (same as test/run-e2e.mjs). */
 const enc = new TextEncoder();

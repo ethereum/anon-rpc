@@ -115,8 +115,36 @@ const probeBundle = Buffer.from(
   // rendered rather than JSON-mangled on this JSON-only boundary.
   anonRpcWorker.log.info("probe worker ready", { noCors: out.noCors });
   anonRpcWorker.signalReady();
+  const enc = new TextEncoder();
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   for (;;) {
     const call = await anonRpcWorker.acceptCall();
+    // §9 streaming across the offscreen hop, both ways. /stream answers in
+    // three chunks with pauses between, so the far side can tell a streamed
+    // body (first chunk early) from a buffered one (everything at the end).
+    if (call.url.endsWith("/stream")) {
+      let i = 0;
+      const body = new ReadableStream({
+        async pull(c) {
+          if (i > 0) await sleep(400);
+          if (i < 3) c.enqueue(enc.encode("chunk" + i++ + ";"));
+          else c.close();
+        },
+      });
+      call.respond({ status: 200, headers: [], body });
+      continue;
+    }
+    // /echo reads a request body that arrives as a stream and returns it.
+    if (call.url.endsWith("/echo")) {
+      const b = call.requestInit && call.requestInit.body;
+      const text = await new Response(b).text();
+      const kind = b instanceof ReadableStream ? "stream" : typeof b;
+      call.respond({ status: 200, headers: [], body: enc.encode(JSON.stringify({ kind, text })) });
+      continue;
+    }
+    // §9.1: forwarded init entries must survive the JSON-only hop too.
+    const opts = call.requestInit && call.requestInit.anonOptions;
+    out.isolationKey = opts ? opts.isolationKey : "(no anonOptions)";
     call.respond({ status: 200, headers: [], body: new TextEncoder().encode(JSON.stringify(out)) });
   }
 })();
@@ -404,7 +432,9 @@ ok("a second call reused the booted worker — no re-read, no re-fetch, no re-ve
 // page takes the address from its query string, so this is the same extension
 // and the same harness — only the worker differs.
 const probePage = await context.newPage();
-await probePage.goto(`chrome-extension://${extensionId}/page.html?address=${SPECIFIER_PROBE}`);
+await probePage.goto(
+  `chrome-extension://${extensionId}/page.html?address=${SPECIFIER_PROBE}&isolationKey=account-1`,
+);
 await probePage
   .waitForFunction(() => document.getElementById("out")?.textContent !== "pending", { timeout: 60_000 })
   .catch(() => {});
@@ -425,6 +455,42 @@ if (env.chrome !== "undefined") {
   await fail(`worker code can see the extension API: chrome is ${env.chrome} (${JSON.stringify(env)})`);
 }
 ok(`worker code cannot reach the extension API (typeof chrome === "${env.chrome}")`);
+
+if (env.isolationKey !== "account-1") {
+  await fail(`anonOptions did not survive the offscreen hop: isolationKey is ${env.isolationKey}`);
+}
+ok("anonOptions crossed the service worker → offscreen hop intact (§9.1, §9.3)");
+
+/* --- §9 bodies stream across the offscreen hop -------------------------- */
+
+const streamPage = await context.newPage();
+await streamPage.goto(`chrome-extension://${extensionId}/page.html?address=${SPECIFIER_PROBE}&stream=1`);
+await streamPage
+  .waitForFunction(() => document.getElementById("out")?.textContent !== "pending", { timeout: 60_000 })
+  .catch(() => {});
+const streamRaw = await streamPage.textContent("#out");
+let streamed;
+try {
+  streamed = JSON.parse(streamRaw);
+} catch {
+  await fail(`stream page did not produce JSON: ${streamRaw}`);
+}
+if (!streamed.ok) await fail(`streaming round trip failed: ${streamed.error}`);
+if (streamed.echoed.kind !== "stream" || streamed.echoed.text !== "streamed request body") {
+  await fail(`stream request body did not reach the worker as a stream: ${JSON.stringify(streamed.echoed)}`);
+}
+ok("a ReadableStream request body reached the worker as a stream, intact");
+const texts = streamed.chunks.map((c) => c.text).join("");
+if (texts !== "chunk0;chunk1;chunk2;") await fail(`streamed response mangled: ${JSON.stringify(streamed.chunks)}`);
+// The worker pauses 400ms between chunks. Buffered, every chunk would land
+// at the end; streamed, the first lands well before the last.
+const firstAt = streamed.chunks[0].at;
+const lastAt = streamed.chunks[streamed.chunks.length - 1].at;
+if (lastAt - firstAt < 600) {
+  await fail(`response was not streamed: chunks at ${streamed.chunks.map((c) => c.at).join(", ")}ms`);
+}
+ok(`response streamed: first chunk at ${firstAt}ms, last at ${lastAt}ms (§9)`);
+await streamPage.close();
 
 if (env.origin !== "null") {
   await fail(`worker origin is ${env.origin}, expected "null" (${JSON.stringify(env)})`);

@@ -1,0 +1,56 @@
+{
+  "name": "@anon-rpc/harness-core",
+  "version": "0.4.0",
+  "description": "anon-rpc harness internals that do not depend on the platform: spec types, the call and log queues, the specifier read and hash check, and plain-value copying.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ethereum/anon-rpc.git",
+    "directory": "impl/harness-core"
+  },
+  "homepage": "https://github.com/ethereum/anon-rpc",
+  "keywords": [
+    "anon-rpc",
+    "ethereum",
+    "privacy",
+    "rpc"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./spec-types": {
+      "types": "./dist/types/spec-types.d.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "CHANGELOG.md",
+    "dist/*.js",
+    "dist/*.js.map",
+    "dist/types",
+    "src"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "node build.mjs && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit && tsc -p test --noEmit",
+    "test": "node check-spec-version.mjs && node test/run.mjs",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+  },
+  "dependencies": {
+    "@noble/hashes": "^1.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.28.0",
+    "typescript": "^5.6.0"
+  }
+}

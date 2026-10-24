@@ -8,6 +8,7 @@
 
 import { PortRpc } from "../protocol.js";
 import { makeWorkerApi } from "./anon-rpc-worker-api.js";
+import type { PlainValue } from "../spec-types.js";
 
 const importScripts = (url: string) =>
   // eslint-disable-next-line no-restricted-globals
@@ -45,7 +46,8 @@ addEventListener("message", function onInit(ev: MessageEvent) {
 
   const port: MessagePort = ev.data.port;
   const bundleBytes: Uint8Array = ev.data.bundleBytes;
-  const config: unknown = ev.data.config;
+  // Already a §9.4 copy: the host copied it before posting (AnonRpcWorker).
+  const config: PlainValue = ev.data.config;
 
   const rpc = new PortRpc(port);
   // config is set before the bundle executes: §7.1 requires it available from

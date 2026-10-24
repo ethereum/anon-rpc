@@ -29,7 +29,7 @@ const out = await build({
 });
 const tmp = resolve(HERE, ".wire.built.mjs");
 await writeFile(tmp, out.outputFiles[0].text);
-const { toB64, fromB64, toWireError } = await import(tmp);
+const { toB64, fromB64, toWireError, encodePlain, plainKey } = await import(tmp);
 // rmSync, not the promise version: an `exit` handler runs to completion
 // synchronously and nothing async in it ever finishes, so the async form
 // leaves the artifact behind — and then someone commits it.
@@ -90,3 +90,13 @@ test("error codes cross intact so a host can branch on them (§12)", () => {
     message: "x",
   });
 });
+
+// The plain-value codec itself is tested in harness-core; what is this hop's
+// own is the cache key built from it.
+test("plainKey ignores key order but keeps distinctions JSON would erase", () => {
+  assert.equal(plainKey(encodePlain({ a: 1, b: 2 })), plainKey(encodePlain({ b: 2, a: 1 })));
+  assert.notEqual(plainKey(encodePlain({ a: NaN })), plainKey(encodePlain({ a: null })));
+  assert.notEqual(plainKey(encodePlain({ a: undefined })), plainKey(encodePlain({})));
+  assert.notEqual(plainKey(encodePlain(new Uint8Array([1]))), plainKey(encodePlain({ 0: 1 })));
+});
+

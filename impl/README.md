@@ -57,10 +57,12 @@ the worker never needs WebRTC itself — the harness owns the transport.
 
 | File | Role |
 | --- | --- |
-| [browser-harness/src/spec-types.ts](browser-harness/src/spec-types.ts) | Spec type surface (§5, §7–§13) |
+| [harness-core/src/spec-types.ts](harness-core/src/spec-types.ts) | Spec type surface (§5, §7–§13), shared by every harness |
+| [harness-core/src/specifier.ts](harness-core/src/specifier.ts) | §4: specifier read (eth_call + ABI decode) + keccak verify; `kps:` entries injected by a harness that has KPS |
+| [harness-core/src/call-queue.ts](harness-core/src/call-queue.ts), [log-queue.ts](harness-core/src/log-queue.ts) | §8 inbound-call queue, §13.1 log retention |
+| [harness-core/src/plain-value.ts](harness-core/src/plain-value.ts) | §9.4 plain values: copying, and a JSON encoding for JSON-only hops |
 | [browser-harness/src/protocol.ts](browser-harness/src/protocol.ts) | `PortRpc`: request/response + events + transfer + cross-boundary abort |
 | [browser-harness/src/host/AnonRpcWorker.ts](browser-harness/src/host/AnonRpcWorker.ts) | Host class (§5): boot, iframe, fetch/acceptCall queue, storage, log |
-| [browser-harness/src/host/specifier.ts](browser-harness/src/host/specifier.ts) | §4: specifier read (eth_call + ABI decode) + keccak verify |
 | [browser-harness/src/host/kps-bridge-host.ts](browser-harness/src/host/kps-bridge-host.ts) | Host side of KPS, using real `@kpstreams/webrtc-client` |
 | [browser-harness/src/host/idb-storage.ts](browser-harness/src/host/idb-storage.ts) | §11 storage backend: IndexedDB, namespaced per specifier address (memory fallback) |
 | [browser-harness/src/iframe/iframe-boot.ts](browser-harness/src/iframe/iframe-boot.ts) | Null-origin iframe: spawns worker, relays port |

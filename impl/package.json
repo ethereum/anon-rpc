@@ -5,6 +5,7 @@
   "type": "module",
   "description": "anon-rpc reference prototype: harness + passthrough worker (see ../SPEC.md).",
   "workspaces": [
+    "harness-core",
     "browser-harness",
     "browser-extension-harness",
     "node-harness",

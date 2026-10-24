@@ -11,7 +11,7 @@
 // each query cost me?") and averaging them together is the mistake this page
 // exists to avoid.
 
-import { AnonRpcWorker } from "@anon-rpc/browser-harness";
+import { AnonRpcWorker, type PlainValue } from "@anon-rpc/browser-harness";
 
 type Arm = {
   /** Stable id, also the label in the driver's output. */
@@ -19,7 +19,7 @@ type Arm = {
   /** IWorkerSpecifier address on mainnet; omitted for the `direct` control. */
   specifier?: string;
   /** §7.1 config handed to the worker as-is. */
-  config?: unknown;
+  config?: PlainValue;
 };
 
 type BootResult = { id: string; ok: boolean; bootMs: number; error?: string };

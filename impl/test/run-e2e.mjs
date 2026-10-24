@@ -159,8 +159,8 @@ async function main() {
       };
       const w = new window.AnonRpcWorker({
         address: cfg.testAddress,
-        // §7.1: delivered to the worker as anonRpcWorker.config (structured
-        // clone — the nested array must survive the two postMessage hops).
+        // §7.1: delivered to the worker as anonRpcWorker.config (a §9.4 plain
+        // value — the nested array must survive the two postMessage hops).
         config: { network: "e2e", retries: 3, tags: ["a", "b"] },
         preExisting: { rpcProvider: provider },
       });
@@ -183,6 +183,20 @@ async function main() {
       const r1 = await w.fetch(`${cfg.origin}/hello`);
       const passthrough = await r1.text();
       const configEcho = r1.headers.get("x-anon-rpc-config");
+
+      // §9.1: init entries the spec does not model are forwarded, not dropped.
+      const rFwd = await w.fetch(`${cfg.origin}/hello`, {
+        anonOptions: { isolationKey: "account-1" },
+        custom: { bytes: new Uint8Array([7, 8]), n: null },
+        // A signal takes a different path through the worker runtime; the
+        // forwarded entries must survive it too.
+        signal: new AbortController().signal,
+      });
+      const fwdOptions = rFwd.headers.get("x-anon-rpc-anon-options");
+      const fwdCustom = rFwd.headers.get("x-anon-rpc-custom");
+      const fwdRefused = await w
+        .fetch(`${cfg.origin}/hello`, { anonOptions: { isolationKey: new Date() } })
+        .then(() => "resolved", (e) => e.name);
 
       const payload = "ping-over-real-kps-" + "x".repeat(100);
       // x-kps-via: dial → the worker uses kps.dial + an explicit connection
@@ -298,6 +312,7 @@ async function main() {
         firstLog, kpsLog,
         sandbox, passthrough, echoed, sentPayload: payload, kpsRemote,
         echoedReq, echoedStream, abortName, afterAbort, callCount, configEcho,
+        fwdOptions, fwdCustom, fwdRefused,
         ptBody, ptCountHeader, ptKpsBody, kpsBadBootError, ptKpsGzBody, signalFailedError,
       };
     },
@@ -322,6 +337,17 @@ async function main() {
     result.configEcho,
     '{"network":"e2e","retries":3,"tags":["a","b"]}',
   );
+  check(
+    "anonOptions forwarded to the worker (§9.1, §9.3)",
+    result.fwdOptions,
+    '{"isolationKey":"account-1"}',
+  );
+  check(
+    "custom init entry forwarded, bytes intact (§9.1, §9.4)",
+    result.fwdCustom,
+    '{"n":null,"bytes":"u8:7,8"}',
+  );
+  check("a non-plain forwarded entry rejects the fetch with TypeError (§9.1)", result.fwdRefused, "TypeError");
   check("kps-routed echo round-trips bytes", result.echoed, result.sentPayload);
   // Dial side: remoteAddress is the dialed endpoint (SPEC §10.1, KPS 0.2.x).
   check(
@@ -334,7 +360,7 @@ async function main() {
   check("pre-aborted fetch rejects with AbortError", result.abortName, "AbortError");
   check("fetch after an aborted fetch still works (§8 no-drop)", result.afterAbort, `hello from ${origin}`);
   // 5 calls were delivered above (the aborted one was withdrawn, never seen).
-  check("worker-persisted call counter (§11 storage)", result.callCount, "5");
+  check("worker-persisted call counter (§11 storage)", result.callCount, "6");
   check("minimal passthrough-worker template serves fetch", result.ptBody, `hello from ${origin}`);
   check("minimal template adds no extra headers", result.ptCountHeader, null);
   check(
@@ -389,7 +415,7 @@ async function main() {
     w.close();
     return { callCount, configEcho };
   }, evalCfg);
-  check("storage persists across page reloads (IndexedDB, §11)", afterReload.callCount, "6");
+  check("storage persists across page reloads (IndexedDB, §11)", afterReload.callCount, "7");
   // This worker was constructed WITHOUT config: §7.1 requires undefined.
   check("absent config surfaces as undefined (§7.1)", afterReload.configEcho, null);
 

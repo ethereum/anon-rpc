@@ -22,8 +22,10 @@
 // The large payload deliberately does NOT cross this boundary at all: the
 // bundle bytes are fetched and hash-verified inside the offscreen document,
 // and the bootstrap provider call is proxied back to the service worker
-// instead. So what gets base64'd is request and response bodies, which for
-// JSON-RPC are small.
+// instead. So what gets base64'd is request and response bodies, which cross
+// as chunks the receiver asks for (body-stream.ts) rather than whole.
+
+import { serializeError, type SerializedError, type WirePlain } from "@anon-rpc/harness-core";
 
 /** Bodies that cross as base64; `undefined` when there is no body. */
 export type B64 = string | undefined;
@@ -49,18 +51,49 @@ export function fromB64(b64: B64): Uint8Array | undefined {
   return out;
 }
 
+// §9.4 plain values cross this hop in harness-core's JSON encoding: JSON
+// alone would lose undefined, NaN, -0 and bytes, and do to bytes what it does
+// to bodies (see the header).
+export { encodePlain, decodePlain, type WirePlain } from "@anon-rpc/harness-core";
+
+/**
+ * A string equal for equal plain values, whatever their key order — so two
+ * structurally identical configs share one cached worker. Unlike JSON of the
+ * decoded value, it keeps NaN, undefined and bytes distinct.
+ */
+export function plainKey(w: WirePlain): string {
+  return JSON.stringify(sortKeys(w));
+}
+
+function sortKeys(w: WirePlain): WirePlain {
+  if (!Array.isArray(w)) return w;
+  if (w[0] === "a") return ["a", ...(w.slice(1) as WirePlain[]).map(sortKeys)];
+  if (w[0] !== "o") return w;
+  const pairs: [string, WirePlain][] = [];
+  for (let i = 1; i < w.length; i += 2) pairs.push([w[i] as string, sortKeys(w[i + 1] as WirePlain)]);
+  pairs.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return ["o", ...pairs.flat()];
+}
+
 /** The long-lived port's name. One port per AnonRpcWorker instance. */
 export const PORT_NAME = "anon-rpc.worker";
 
-export type WireError = { name: string; message: string; code?: string };
+/** §12 errors cross with name and code intact (harness-core). */
+export type WireError = SerializedError;
+export const toWireError = serializeError;
 
-export function toWireError(err: unknown): WireError {
-  if (err instanceof Error) {
-    const code = (err as { code?: unknown }).code;
-    return { name: err.name, message: err.message, ...(typeof code === "string" ? { code } : {}) };
-  }
-  return { name: "Error", message: String(err) };
-}
+/**
+ * A §9 body crossing as chunks (body-stream.ts). The receiver sends pull and
+ * cancel; the sender answers with chunk, end or error. `ch` says whose body it
+ * is, since one call can have both a request and a response body in flight.
+ */
+export type BodyChannel = "request" | "response";
+export type BodyMessage =
+  | { t: "body.pull"; ch: BodyChannel; callId: number }
+  | { t: "body.cancel"; ch: BodyChannel; callId: number; reason?: string }
+  | { t: "body.chunk"; ch: BodyChannel; callId: number; data: string }
+  | { t: "body.end"; ch: BodyChannel; callId: number }
+  | { t: "body.error"; ch: BodyChannel; callId: number; error: WireError };
 
 /** A §9 request, minus the body (which rides alongside as base64). */
 export type WireRequest = {
@@ -74,7 +107,7 @@ export type ToOffscreen =
   | {
       t: "boot";
       address: string;
-      config?: unknown;
+      config: WirePlain;
       iframeUrl: string;
       /**
        * Reuse an already-booted worker for the same address+config if the
@@ -83,14 +116,26 @@ export type ToOffscreen =
        */
       reuse: boolean;
     }
-  | { t: "fetch"; callId: number; url: string; request: WireRequest; body: B64 }
+  | {
+      t: "fetch";
+      callId: number;
+      url: string;
+      request: WireRequest;
+      /** A body already in memory, whole. */
+      body: B64;
+      /** The body is a stream, and follows as "request" chunks instead. */
+      bodyStream?: true;
+      /** §9.1 forwarded init entries, as one encoded object. */
+      forwarded?: WirePlain;
+    }
   | { t: "abort"; callId: number }
   | { t: "close" }
   // The offscreen document has no RPC provider of its own — §4 says the
   // specifier is read through one the host already has, and the host is the
   // service worker. So provider calls travel outward and their results back.
   | { t: "provider.result"; id: number; ok: true; value: unknown }
-  | { t: "provider.result"; id: number; ok: false; error: WireError };
+  | { t: "provider.result"; id: number; ok: false; error: WireError }
+  | BodyMessage;
 
 /** offscreen document → service worker */
 export type FromOffscreen =
@@ -103,10 +148,12 @@ export type FromOffscreen =
       status: number;
       headers: [string, string][];
       url?: string;
-      body: B64;
+      /** The body follows as "response" chunks; false for a null body. */
+      hasBody: boolean;
     }
   | { t: "response"; callId: number; ok: false; error: WireError }
   | { t: "provider.request"; id: number; method: string; params?: unknown[] }
+  | BodyMessage
   /**
    * One §13 log entry, on its way from the offscreen document to whoever
    * called acceptLog() in the service worker.
