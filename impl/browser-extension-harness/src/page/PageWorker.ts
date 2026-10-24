@@ -22,7 +22,7 @@ import { assertAssetPresent } from "../background/assets.js";
 import { DEFAULT_IFRAME_URL, type ExtensionWorkerInit } from "../background/OffscreenWorker.js";
 import { chromeApi } from "../chrome-types.js";
 import { resolveIframeUrl } from "../iframe-url.js";
-import { copyPlainValue } from "@anon-rpc/harness-core";
+import { copyForwardedEntries, copyPlainValue } from "@anon-rpc/harness-core";
 
 export class PageWorker {
   readonly ready: Promise<void>;
@@ -62,7 +62,22 @@ export class PageWorker {
     // §5: `fetch` MUST be this-bound so it works as a free function. Calls made
     // before the asset check finishes wait for it, as the browser harness
     // buffers calls made before its worker is ready (§8).
-    this.fetch = async (input, requestInit) => (await this.#inner).fetch(input, requestInit);
+    //
+    // §9.1 copies forwarded entries when fetch is called — but the browser
+    // harness only sees the call after #inner settles, by which time the host
+    // may have changed them (an options object reused across accounts would
+    // send this call under the next account's isolationKey). So they are
+    // copied here, synchronously, and the harness is handed the copies.
+    this.fetch = (input, requestInit) => {
+      let init = requestInit;
+      try {
+        const copied = copyForwardedEntries(requestInit);
+        if (copied) init = { ...requestInit, ...copied };
+      } catch (e) {
+        return Promise.reject(e);
+      }
+      return this.#inner.then((worker) => worker.fetch(input, init));
+    };
   }
 
   /** §5/§13.1: the next log entry from the worker. */

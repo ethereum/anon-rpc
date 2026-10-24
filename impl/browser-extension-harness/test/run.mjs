@@ -1,5 +1,5 @@
-// The package's test entry: unit tests for the wire codec and the body
-// stream protocol, then the e2es.
+// The package's test entry: unit tests for the wire codec, the body stream
+// protocol and the two host modes against a fake `chrome`, then the e2es.
 //
 // The split matters. The codec can be checked anywhere; everything else about
 // this package is a browser-extension mechanic that only a browser can answer,
@@ -20,5 +20,6 @@ const run = (file, label) =>
 
 await run("wire.test.mjs", "wire tests");
 await run("body-stream.test.mjs", "body stream tests");
+await run("workers.test.mjs", "host-mode tests");
 await run("e2e.mjs", "extension e2e");
 await run("e2e-firefox.mjs", "Firefox extension e2e");

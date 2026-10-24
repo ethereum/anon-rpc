@@ -33,9 +33,11 @@ export class BodyReceiver {
   #waiting?: { resolve: () => void };
   #done = false;
   #onDone: () => void;
+  #cancelRemote: (reason?: string) => void;
 
   constructor(ch: BodyChannel, callId: number, send: Send, onDone: () => void) {
     this.#onDone = onDone;
+    this.#cancelRemote = (reason) => send({ t: "body.cancel", ch, callId, reason });
     this.stream = new ReadableStream<Uint8Array>(
       {
         start: (c) => {
@@ -49,7 +51,7 @@ export class BodyReceiver {
             send({ t: "body.pull", ch, callId });
           }),
         cancel: (reason) => {
-          if (this.#finish()) send({ t: "body.cancel", ch, callId, reason: describe(reason) });
+          if (this.#finish()) this.#cancelRemote(describe(reason));
         },
       },
       // Read one chunk ahead, no more.
@@ -77,11 +79,18 @@ export class BodyReceiver {
     this.#release();
   }
 
-  /** Error the stream from this side: an abort, or the port going away. */
+  /**
+   * Error the stream from this side — an abort, a failed call, the port going
+   * away — and tell the sender, whose source would otherwise stay locked and
+   * unread until the whole harness closes. (When the port is what went away,
+   * the cancel goes nowhere, and the far side's own disconnect handling stops
+   * its sender instead.)
+   */
   fail(err: unknown): void {
     if (!this.#finish()) return;
     this.#controller.error(err);
     this.#release();
+    this.#cancelRemote(describe(err));
   }
 
   #release(): void {
@@ -173,9 +182,13 @@ export class BodyStreams {
     this.#send = send;
   }
 
-  receive(ch: BodyChannel, callId: number): BodyReceiver {
+  /** `onDone` runs once the body has ended, errored or been cancelled. */
+  receive(ch: BodyChannel, callId: number, onDone?: () => void): BodyReceiver {
     const key = `${ch}:${callId}`;
-    const r = new BodyReceiver(ch, callId, this.#send, () => this.#receivers.delete(key));
+    const r = new BodyReceiver(ch, callId, this.#send, () => {
+      this.#receivers.delete(key);
+      onDone?.();
+    });
     this.#receivers.set(key, r);
     return r;
   }

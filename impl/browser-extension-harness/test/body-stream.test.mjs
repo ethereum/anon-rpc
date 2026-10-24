@@ -161,3 +161,33 @@ test("an empty body ends without sending a chunk", async () => {
   assert.equal(got.length, 0);
   assert.ok(!sent.includes("body.chunk"));
 });
+
+test("a receiver failed on its own side cancels the remote sender", async () => {
+  // The offscreen side fails an upload's receiver when the worker rejects the
+  // call; the service worker's source must not stay locked and unread.
+  const { a, b } = pair();
+  const { stream, log } = source([bytes(1), bytes(2)]);
+  a.send("request", 3, stream);
+  b.receive("request", 3).fail(new Error("worker rejected the call"));
+  await tick();
+  assert.equal(log.cancelled, "worker rejected the call");
+});
+
+test("onDone runs once when a received body ends, errors or is cancelled", async () => {
+  for (const ending of ["end", "error", "cancel"]) {
+    const { a, b } = pair();
+    let done = 0;
+    a.send("response", 1, source([bytes(1)], ending === "error" ? { error: new Error("x") } : {}).stream);
+    const reader = b.receive("response", 1, () => done++).stream.getReader();
+    if (ending === "cancel") await reader.cancel();
+    else for (;;) {
+      try {
+        if ((await reader.read()).done) break;
+      } catch {
+        break;
+      }
+    }
+    await tick();
+    assert.equal(done, 1, ending);
+  }
+});

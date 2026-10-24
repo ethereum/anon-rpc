@@ -3,7 +3,7 @@
 // list and the effective abort signal.
 
 import type { AnonRequestInit, HeaderList, PlainValue } from "../spec-types.js";
-import { copyPlainValue } from "@anon-rpc/harness-core";
+import { copyForwardedEntries } from "@anon-rpc/harness-core";
 
 export type WireRequestInit = {
   method?: string;
@@ -19,8 +19,6 @@ export type WireRequestInit = {
   forwarded?: { [key: string]: PlainValue };
 };
 
-// The init members §9.1 models; every other key is a forwarded entry.
-const MODELED = new Set(["method", "headers", "body", "redirect", "signal"]);
 
 export type NormalizedRequest = {
   url: string;
@@ -35,7 +33,7 @@ export async function normalizeRequest(
 ): Promise<NormalizedRequest> {
   // Before any await: §9.1 copies forwarded values when fetch is called, so a
   // host mutating them afterwards cannot change the call.
-  const forwarded = forwardedEntries(init);
+  const forwarded = copyForwardedEntries(init);
 
   // A Request input carries method/headers/body/redirect/signal itself;
   // materialize it with any init overrides rather than reading init alone.
@@ -105,27 +103,6 @@ export async function normalizeRequest(
   if (forwarded) requestInit.forwarded = forwarded;
 
   return { url, requestInit, transfer, signal: src.signal ?? undefined };
-}
-
-/**
- * §9.1: every own enumerable string-keyed init entry §9.1 does not model,
- * copied as a plain value. One that is not plain fails the whole fetch with a
- * TypeError — dropping it would lose an option without anyone noticing.
- */
-function forwardedEntries(init: RequestInit | undefined): WireRequestInit["forwarded"] {
-  if (!init) return undefined;
-  let out: WireRequestInit["forwarded"];
-  for (const key of Object.keys(init)) {
-    if (MODELED.has(key)) continue;
-    out ??= {};
-    Object.defineProperty(out, key, {
-      value: copyPlainValue((init as Record<string, unknown>)[key], `init.${key}`),
-      writable: true,
-      enumerable: true,
-      configurable: true,
-    });
-  }
-  return out;
 }
 
 function headersToList(h: HeadersInit | undefined): HeaderList | undefined {

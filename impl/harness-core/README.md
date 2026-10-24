@@ -20,6 +20,9 @@ version **0.4.0**. (The package version is kept `>=` that spec version.)
 - **`LogQueue`** (§13.1) — ordered, bounded log retention.
 - **`copyPlainValue`, `encodePlain` / `decodePlain`** (§9.4) — copying plain
   values, and carrying them across a boundary that only takes JSON.
+- **`copyForwardedEntries`** (§9.1) — the fetch-init entries forwarded to the
+  worker, copied at call time. Every harness calls it synchronously in its
+  `fetch`, before anything is awaited.
 - **`RpcError` / `serializeError`** (§12) — errors that keep `name` and `code`
   across a boundary.
 

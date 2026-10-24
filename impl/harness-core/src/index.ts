@@ -11,4 +11,5 @@ export {
   type ResolverKind,
 } from "./specifier.js";
 export { copyPlainValue, encodePlain, decodePlain, type WirePlain } from "./plain-value.js";
+export { copyForwardedEntries, MODELED_INIT_KEYS } from "./forwarded.js";
 export { RpcError, serializeError, type SerializedError } from "./errors.js";

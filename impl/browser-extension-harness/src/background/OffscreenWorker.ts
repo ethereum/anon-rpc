@@ -33,7 +33,7 @@ import {
 } from "../wire.js";
 import { ASSET_PATH, assertAssetPresent } from "./assets.js";
 import { resolveIframeUrl } from "../iframe-url.js";
-import { LogQueue } from "@anon-rpc/harness-core";
+import { LogQueue, copyForwardedEntries } from "@anon-rpc/harness-core";
 import { BodyStreams } from "../body-stream.js";
 
 /** §13.1 retention bound; see the browser harness for the sizing note. */
@@ -89,8 +89,6 @@ type Pending = {
   cleanup?: () => void;
 };
 
-// The init members §9.1 models; every other key is a forwarded entry.
-const MODELED = new Set(["method", "headers", "body", "redirect", "signal"]);
 
 export class OffscreenWorker {
   readonly ready: Promise<void>;
@@ -205,10 +203,13 @@ export class OffscreenWorker {
           const headers = new Headers();
           for (const [k, v] of msg.headers) headers.append(k, v);
           // The body streams in behind the headers, as the caller reads it. The
-          // abort listener stays attached until then: an abort mid-body must
-          // still reach the worker and error the stream (#fetch).
-          const body = msg.hasBody ? this.#bodies.receive("response", msg.callId).stream : null;
-          if (!body) call.cleanup?.();
+          // abort listener stays attached until the body is done — an abort
+          // mid-body must still reach the worker and error the stream (#fetch)
+          // — and is removed then, so a long-lived signal shared by many calls
+          // does not collect a listener per call.
+          const done = () => call.cleanup?.();
+          const body = msg.hasBody ? this.#bodies.receive("response", msg.callId, done).stream : null;
+          if (!body) done();
           const res = new Response(body, { status: msg.status, headers });
           // Response.url is read-only and unset by the constructor; surface the
           // worker-reported post-redirect URL (§9.2) by shadowing the getter.
@@ -216,7 +217,11 @@ export class OffscreenWorker {
           call.resolve(res);
         } else {
           call.cleanup?.();
-          call.reject(rehydrate(msg.error));
+          const err = rehydrate(msg.error);
+          // A request body still streaming has nowhere to go: stop reading the
+          // caller's stream and release it, rather than leave it locked.
+          this.#bodies.abort(msg.callId, err);
+          call.reject(err);
         }
         return;
       }
@@ -250,16 +255,24 @@ export class OffscreenWorker {
     if (this.#failure !== undefined) throw this.#failure;
     // Before any await: §9.1 copies forwarded values when fetch is called, and
     // one that is not plain fails this fetch rather than being dropped.
-    const forwarded = forwardedEntries(init);
+    const copied = copyForwardedEntries(init);
+    const forwarded = copied && encodePlain(copied);
 
+    // The Request below only normalizes url, method, headers and a whole body.
     // A stream body is not read here: it crosses chunk by chunk as the worker
-    // reads it (body-stream.ts). Kept out of the Request built for the headers,
-    // which would otherwise demand `duplex` and take the stream for itself.
+    // reads it (body-stream.ts), and would otherwise demand `duplex` and be
+    // taken by the Request. The signal is kept out too — the abort path below
+    // owns it, and a Request would hang its own listener on the caller's
+    // signal for every call.
     const streamBody = init?.body instanceof ReadableStream ? (init.body as ReadableStream<Uint8Array>) : undefined;
     const req =
       input instanceof Request && !init
         ? input
-        : new Request(input as RequestInfo, streamBody ? { ...init, body: undefined } : init);
+        : new Request(input as RequestInfo, {
+            ...init,
+            signal: undefined,
+            ...(streamBody ? { body: undefined } : {}),
+          });
     const headers: [string, string][] = [];
     req.headers.forEach((v, k) => headers.push([k, v]));
     const request: WireRequest = { method: req.method };
@@ -363,18 +376,4 @@ function rehydrate(e: { name: string; message: string; code?: string }): Error {
   err.name = e.name;
   if (e.code) (err as Error & { code: string }).code = e.code;
   return err;
-}
-
-/**
- * §9.1: every own enumerable string-keyed init entry §9.1 does not model, as
- * one encoded object. Only init contributes — a Request keeps none of them.
- */
-function forwardedEntries(init: RequestInit | undefined): WirePlain | undefined {
-  if (!init) return undefined;
-  const out: ["o", ...(string | WirePlain)[]] = ["o"];
-  for (const key of Object.keys(init)) {
-    if (MODELED.has(key)) continue;
-    out.push(key, encodePlain((init as Record<string, unknown>)[key], `init.${key}`));
-  }
-  return out.length > 1 ? out : undefined;
 }

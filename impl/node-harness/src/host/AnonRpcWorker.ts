@@ -30,6 +30,7 @@ import type {
 import {
   CallQueue,
   LogQueue,
+  copyForwardedEntries,
   encodePlain,
   fetchAndVerifyBundle,
   readSpecifier,
@@ -39,8 +40,6 @@ import {
 /** §13.1 retention bound; see the browser harness for the sizing note. */
 const LOG_RETENTION = 1000;
 
-// The init members §9.1 models; every other key is a forwarded entry.
-const MODELED = new Set(["method", "headers", "body", "redirect", "signal"]);
 
 /**
  * A §9 request as it crosses to the guest: the modeled fields, plus §9.1's
@@ -412,7 +411,8 @@ async function normalizeRequest(
 ): Promise<{ url: string; wire: WireRequestInit; signal?: AbortSignal }> {
   // Before any await: §9.1 copies forwarded values when fetch is called, and
   // one that is not plain fails this fetch rather than being dropped.
-  const forwarded = forwardedEntries(init);
+  const copied = copyForwardedEntries(init);
+  const forwarded = copied && encodePlain(copied);
   const req = input instanceof Request && !init ? input : new Request(input, init);
   const headers: HeaderList = [];
   req.headers.forEach((v, k) => headers.push([k, v]));
@@ -429,18 +429,4 @@ async function normalizeRequest(
   // The signal is returned alongside, never inside `wire`: the guest gets one
   // it synthesises from call.abort.
   return { url: req.url, wire, signal: init?.signal ?? undefined };
-}
-
-/**
- * §9.1: every own enumerable string-keyed init entry §9.1 does not model, as
- * one encoded object. Only init contributes — a Request keeps none of them.
- */
-function forwardedEntries(init: RequestInit | undefined): WirePlain | undefined {
-  if (!init) return undefined;
-  const out: ["o", ...(string | WirePlain)[]] = ["o"];
-  for (const key of Object.keys(init)) {
-    if (MODELED.has(key)) continue;
-    out.push(key, encodePlain((init as Record<string, unknown>)[key], `init.${key}`));
-  }
-  return out.length > 1 ? out : undefined;
 }

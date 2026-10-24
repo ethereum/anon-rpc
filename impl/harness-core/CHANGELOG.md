@@ -15,5 +15,9 @@ the Node harness, now in one place.
   KPS shares the §4 code and simply leaves `kps:` entries unrecognized.
 - `CallQueue.rejectAll` returns the items it dropped, so the caller settles
   them. (The Node copy already did; the browser copy had drifted.)
+- `copyForwardedEntries` (§9.1): one implementation of which init entries
+  are forwarded and how they are copied, for the four places that did it
+  separately — including the extension's Firefox mode, whose copy ran only
+  after awaiting its worker and so missed changes made after `fetch` returned.
 - `encodePlain` / `decodePlain`: one JSON encoding of §9.4 plain values, with
   bytes as hex, for the extension's messaging hop and the QuickJS guest.
