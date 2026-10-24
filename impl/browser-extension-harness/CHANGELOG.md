@@ -21,6 +21,13 @@ Implements spec 0.4.0. Requires `@anon-rpc/browser-harness` 0.4.0 and
   crossed the JSON hop lossily (a `Uint8Array`, an `undefined` property) now
   arrive exactly, and the offscreen worker cache keys on that exact value.
 - `fetch` is typed `AnonFetch` (re-exported from the browser harness).
+- **Added: streamed bodies on Chromium.** §9 bodies crossing the service
+  worker → offscreen hop used to be read whole first; they now cross as chunks
+  the reading side asks for, and are rebuilt as streams. Responses always
+  stream — the first bytes are readable before the worker has finished, and a
+  large response is no longer held twice. A `ReadableStream` request body
+  streams too (pass `duplex: "half"`, as `fetch` requires); other bodies cross
+  whole as before. Cancelling or aborting stops both ends.
 - **Internal:** the log queue and the §9.4 plain-value encoding come from
   `@anon-rpc/harness-core`.
 

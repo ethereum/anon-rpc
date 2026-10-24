@@ -27,13 +27,13 @@ import {
   decodePlain,
   fromB64,
   plainKey,
-  toB64,
   toWireError,
   type FromOffscreen,
   type ToOffscreen,
 } from "../wire.js";
 
 import { chromeApi, type RuntimePort } from "../chrome-types.js";
+import { BodyStreams } from "../body-stream.js";
 
 type Entry = {
   worker: AnonRpcWorker;
@@ -106,12 +106,15 @@ function serve(port: RuntimePort, cache: Map<string, Entry>, idleMs: number): vo
   let key: string | undefined;
   let closed = false;
   const inFlight = new Map<number, AbortController>();
+  // §9 bodies crossing this connection, both directions (body-stream.ts).
+  const bodies = new BodyStreams(send);
 
   const detach = () => {
     if (closed) return;
     closed = true;
     for (const ac of inFlight.values()) ac.abort();
     inFlight.clear();
+    bodies.closeAll(new Error("service worker disconnected"));
     for (const p of providerCalls.values()) p.reject(new Error("service worker disconnected"));
     providerCalls.clear();
     if (!entry || !key) return;
@@ -137,6 +140,7 @@ function serve(port: RuntimePort, cache: Map<string, Entry>, idleMs: number): vo
 
   port.onMessage.addListener((raw) => {
     const msg = raw as ToOffscreen;
+    if (bodies.route(msg)) return;
     switch (msg?.t) {
       case "boot": {
         // A distinct config is a distinct worker: §7.1 fixes config for the
@@ -190,7 +194,9 @@ function serve(port: RuntimePort, cache: Map<string, Entry>, idleMs: number): vo
         }
         const ac = new AbortController();
         inFlight.set(msg.callId, ac);
-        const body = fromB64(msg.body);
+        // A stream body is pulled from the service worker as the worker reads
+        // it; anything else arrived whole.
+        const body = msg.bodyStream ? bodies.receive("request", msg.callId).stream : fromB64(msg.body);
         void entry.worker
           .fetch(msg.url, {
             // §9.1 forwarded entries first: none of them is a modeled key.
@@ -202,11 +208,12 @@ function serve(port: RuntimePort, cache: Map<string, Entry>, idleMs: number): vo
             signal: ac.signal,
           })
           .then(
-            async (res) => {
-              const bytes = new Uint8Array(await res.arrayBuffer());
+            (res) => {
               const headers: [string, string][] = [];
               res.headers.forEach((v, k2) => headers.push([k2, v]));
-              inFlight.delete(msg.callId);
+              // Headers now, body as the service worker pulls it. inFlight
+              // keeps the controller until the body is done, so an abort that
+              // arrives mid-body still reaches the worker.
               send({
                 t: "response",
                 callId: msg.callId,
@@ -214,11 +221,17 @@ function serve(port: RuntimePort, cache: Map<string, Entry>, idleMs: number): vo
                 status: res.status,
                 headers,
                 url: res.url || undefined,
-                body: toB64(bytes),
+                hasBody: res.body !== null,
               });
+              if (!res.body) {
+                inFlight.delete(msg.callId);
+                return;
+              }
+              bodies.send("response", msg.callId, res.body, () => inFlight.delete(msg.callId));
             },
             (e) => {
               inFlight.delete(msg.callId);
+              bodies.abort(msg.callId, e); // a request body the worker never finished reading
               send({ t: "response", callId: msg.callId, ok: false, error: toWireError(e) });
             },
           );
@@ -228,6 +241,7 @@ function serve(port: RuntimePort, cache: Map<string, Entry>, idleMs: number): vo
       case "abort":
         inFlight.get(msg.callId)?.abort();
         inFlight.delete(msg.callId);
+        bodies.abort(msg.callId, new DOMException("aborted", "AbortError"));
         return;
 
       case "provider.result": {

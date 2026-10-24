@@ -22,8 +22,8 @@
 // The large payload deliberately does NOT cross this boundary at all: the
 // bundle bytes are fetched and hash-verified inside the offscreen document,
 // and the bootstrap provider call is proxied back to the service worker
-// instead. So what gets base64'd is request and response bodies, which for
-// JSON-RPC are small.
+// instead. So what gets base64'd is request and response bodies, which cross
+// as chunks the receiver asks for (body-stream.ts) rather than whole.
 
 import { serializeError, type SerializedError, type WirePlain } from "@anon-rpc/harness-core";
 
@@ -82,6 +82,19 @@ export const PORT_NAME = "anon-rpc.worker";
 export type WireError = SerializedError;
 export const toWireError = serializeError;
 
+/**
+ * A §9 body crossing as chunks (body-stream.ts). The receiver sends pull and
+ * cancel; the sender answers with chunk, end or error. `ch` says whose body it
+ * is, since one call can have both a request and a response body in flight.
+ */
+export type BodyChannel = "request" | "response";
+export type BodyMessage =
+  | { t: "body.pull"; ch: BodyChannel; callId: number }
+  | { t: "body.cancel"; ch: BodyChannel; callId: number; reason?: string }
+  | { t: "body.chunk"; ch: BodyChannel; callId: number; data: string }
+  | { t: "body.end"; ch: BodyChannel; callId: number }
+  | { t: "body.error"; ch: BodyChannel; callId: number; error: WireError };
+
 /** A §9 request, minus the body (which rides alongside as base64). */
 export type WireRequest = {
   method?: string;
@@ -108,7 +121,10 @@ export type ToOffscreen =
       callId: number;
       url: string;
       request: WireRequest;
+      /** A body already in memory, whole. */
       body: B64;
+      /** The body is a stream, and follows as "request" chunks instead. */
+      bodyStream?: true;
       /** §9.1 forwarded init entries, as one encoded object. */
       forwarded?: WirePlain;
     }
@@ -118,7 +134,8 @@ export type ToOffscreen =
   // specifier is read through one the host already has, and the host is the
   // service worker. So provider calls travel outward and their results back.
   | { t: "provider.result"; id: number; ok: true; value: unknown }
-  | { t: "provider.result"; id: number; ok: false; error: WireError };
+  | { t: "provider.result"; id: number; ok: false; error: WireError }
+  | BodyMessage;
 
 /** offscreen document → service worker */
 export type FromOffscreen =
@@ -131,10 +148,12 @@ export type FromOffscreen =
       status: number;
       headers: [string, string][];
       url?: string;
-      body: B64;
+      /** The body follows as "response" chunks; false for a null body. */
+      hasBody: boolean;
     }
   | { t: "response"; callId: number; ok: false; error: WireError }
   | { t: "provider.request"; id: number; method: string; params?: unknown[] }
+  | BodyMessage
   /**
    * One §13 log entry, on its way from the offscreen document to whoever
    * called acceptLog() in the service worker.

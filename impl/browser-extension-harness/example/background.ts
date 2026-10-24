@@ -107,10 +107,51 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
     address?: string;
     url?: string;
     iframeUrl?: string;
+    isolationKey?: string;
   };
   if (m?.type === "anon-logs") {
     const key = `${m.address || SPECIFIER}|${m.iframeUrl ?? ""}`;
     respond({ ok: true, rows: logs.get(key) ?? [] });
+    return true;
+  }
+  // For the e2e: §9 bodies streamed across the offscreen hop, both ways. A
+  // request body sent as a stream, then a response read chunk by chunk with
+  // the time each chunk arrived.
+  if (m?.type === "anon-stream") {
+    void (async () => {
+      try {
+        const w = getWorker(m.address || SPECIFIER, m.iframeUrl);
+        await w.ready;
+        const enc = new TextEncoder();
+        const parts = ["streamed ", "request ", "body"];
+        const echo = await w.fetch(`${ORIGIN}/echo`, {
+          method: "POST",
+          body: new ReadableStream({
+            pull(c) {
+              const p = parts.shift();
+              if (p === undefined) c.close();
+              else c.enqueue(enc.encode(p));
+            },
+          }),
+          // Required by fetch for a stream body; the harness forwards it.
+          duplex: "half",
+        } as RequestInit);
+        const echoed = await echo.json();
+        const t0 = Date.now();
+        const res = await w.fetch(`${ORIGIN}/stream`);
+        const chunks: { text: string; at: number }[] = [];
+        const dec = new TextDecoder();
+        const reader = res.body!.getReader();
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push({ text: dec.decode(value), at: Date.now() - t0 });
+        }
+        respond({ ok: true, echoed, chunks, total: Date.now() - t0 });
+      } catch (e) {
+        respond({ ok: false, error: (e as Error)?.message ?? String(e) });
+      }
+    })();
     return true;
   }
   if (m?.type !== "anon-fetch") return;

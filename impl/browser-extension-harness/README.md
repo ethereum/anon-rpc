@@ -342,12 +342,24 @@ Firefox (140+) and a geckodriver.
 
 Everything the browser harness implements, it implements — §4 verification, §5,
 §7, §8, §9, §10's KPS bridge, §11 storage — because it *is* the browser harness,
-one document over. What this package owns is the remoting, and that part is
-deliberately incomplete in two ways:
+one document over. What this package owns is the remoting:
 
-- **Bodies are buffered, not streamed.** Extension messaging cannot carry a
-  `ReadableStream`, so a §9 body is read to bytes before it crosses and base64'd.
-  §9 permits this; a large response pays for it twice.
+- **Bodies stream, in chunks the reader asks for.** Extension messaging cannot
+  carry a `ReadableStream`, so on Chromium a §9 body crosses the service-worker
+  ↔ offscreen hop as base64 chunks and is rebuilt as a stream on the far side.
+  The reading side requests each chunk, so a slow reader holds the worker back
+  instead of chunks piling up in the service worker; cancelling or aborting
+  stops both ends. Responses always stream. A request body streams when you
+  pass a `ReadableStream`; any other body is already in memory and crosses
+  whole. (On Firefox there is no hop, and streams pass straight through.)
+- **A quiet stream can lose its service worker.** Chrome stops an idle
+  extension service worker after about 30 seconds. Arriving chunks count as
+  activity; a response that goes silent for longer — a long poll, a
+  subscription — can lose its service worker mid-body, which errors the
+  stream. Not yet measured, and not worked around.
+
+Two things are deliberately incomplete:
+
 - **Log arguments arrive as rendered strings.** §13 entries cross the
   service-worker boundary as JSON, which turns a `Uint8Array` into
   `{"0":72,…}` without complaining, so `acceptLog()` here yields arguments

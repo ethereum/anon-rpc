@@ -17,6 +17,12 @@ async function go(): Promise<void> {
     const isolationKey = q.get("isolationKey") ?? undefined;
     // ?logs=1 reads what the worker logged instead of making a call, so the
     // e2e can inspect the §13 path through the same page.
+    // ?stream=1 runs the streaming round trip instead (e2e).
+    if (q.has("stream")) {
+      const res = await chrome.runtime.sendMessage({ type: "anon-stream", address, iframeUrl });
+      out.textContent = JSON.stringify(res);
+      return;
+    }
     if (q.has("logs")) {
       const rows = await chrome.runtime.sendMessage({ type: "anon-logs", address, iframeUrl });
       out.textContent = JSON.stringify(rows);

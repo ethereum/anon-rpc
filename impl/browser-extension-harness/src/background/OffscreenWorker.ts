@@ -24,7 +24,6 @@ import { chromeApi, type RuntimePort } from "../chrome-types.js";
 import {
   PORT_NAME,
   encodePlain,
-  fromB64,
   toB64,
   toWireError,
   type FromOffscreen,
@@ -35,6 +34,7 @@ import {
 import { ASSET_PATH, assertAssetPresent } from "./assets.js";
 import { resolveIframeUrl } from "../iframe-url.js";
 import { LogQueue } from "@anon-rpc/harness-core";
+import { BodyStreams } from "../body-stream.js";
 
 /** §13.1 retention bound; see the browser harness for the sizing note. */
 const LOG_RETENTION = 1000;
@@ -109,6 +109,8 @@ export class OffscreenWorker {
   // that produced them actually runs.
   #logs = new LogQueue<LogEntry>(LOG_RETENTION);
   #logsClaimed = false;
+  // §9 bodies in flight across the port, both directions (body-stream.ts).
+  #bodies = new BodyStreams((m) => this.#send(m));
 
   constructor(init: ExtensionWorkerInit) {
     // §7.1: a config that is not a §9.4 plain value fails construction. Encoded
@@ -185,6 +187,7 @@ export class OffscreenWorker {
   }
 
   #onMessage(msg: FromOffscreen): void {
+    if (this.#bodies.route(msg)) return;
     switch (msg?.t) {
       case "ready":
         this.#readyResolve();
@@ -198,23 +201,21 @@ export class OffscreenWorker {
         const call = this.#calls.get(msg.callId);
         if (!call) return; // aborted before the answer arrived
         this.#calls.delete(msg.callId);
-        call.cleanup?.();
         if (msg.ok) {
-          const bytes = fromB64(msg.body);
           const headers = new Headers();
           for (const [k, v] of msg.headers) headers.append(k, v);
-          // 204/205/304 must have a null body.
-          const nullBody = msg.status === 204 || msg.status === 205 || msg.status === 304;
-          // The cast is the DOM lib's problem, not ours: a Uint8Array is a
-          // perfectly good BodyInit at runtime, but `BodyInit` is typed as
-          // BufferSource-minus-Uint8Array in this lib version.
-          const body = nullBody ? null : ((bytes ?? new Uint8Array(0)) as unknown as BodyInit);
+          // The body streams in behind the headers, as the caller reads it. The
+          // abort listener stays attached until then: an abort mid-body must
+          // still reach the worker and error the stream (#fetch).
+          const body = msg.hasBody ? this.#bodies.receive("response", msg.callId).stream : null;
+          if (!body) call.cleanup?.();
           const res = new Response(body, { status: msg.status, headers });
           // Response.url is read-only and unset by the constructor; surface the
           // worker-reported post-redirect URL (§9.2) by shadowing the getter.
           if (msg.url) Object.defineProperty(res, "url", { value: msg.url });
           call.resolve(res);
         } else {
+          call.cleanup?.();
           call.reject(rehydrate(msg.error));
         }
         return;
@@ -251,17 +252,23 @@ export class OffscreenWorker {
     // one that is not plain fails this fetch rather than being dropped.
     const forwarded = forwardedEntries(init);
 
-    const req = input instanceof Request && !init ? input : new Request(input as RequestInfo, init);
+    // A stream body is not read here: it crosses chunk by chunk as the worker
+    // reads it (body-stream.ts). Kept out of the Request built for the headers,
+    // which would otherwise demand `duplex` and take the stream for itself.
+    const streamBody = init?.body instanceof ReadableStream ? (init.body as ReadableStream<Uint8Array>) : undefined;
+    const req =
+      input instanceof Request && !init
+        ? input
+        : new Request(input as RequestInfo, streamBody ? { ...init, body: undefined } : init);
     const headers: [string, string][] = [];
     req.headers.forEach((v, k) => headers.push([k, v]));
     const request: WireRequest = { method: req.method };
     if (headers.length) request.headers = headers;
     if (init?.redirect) request.redirect = init.redirect;
 
-    // Buffered to bytes: a streaming body cannot cross extension messaging, and
-    // §9 permits a buffered one.
+    // Any other body is already in memory, or as good as: it crosses whole.
     let body: Uint8Array | undefined;
-    if (req.method !== "GET" && req.method !== "HEAD") {
+    if (!streamBody && req.method !== "GET" && req.method !== "HEAD") {
       const buf = await req.arrayBuffer();
       if (buf.byteLength) body = new Uint8Array(buf);
     }
@@ -282,10 +289,11 @@ export class OffscreenWorker {
           // Tell the far side so it can abort the worker's call (§9), then
           // fail locally regardless — an unresponsive worker must not keep the
           // caller blocked.
+          const reason = signal.reason ?? new DOMException("aborted", "AbortError");
           this.#send({ t: "abort", callId });
-          if (this.#calls.delete(callId)) {
-            reject(signal.reason ?? new DOMException("aborted", "AbortError"));
-          }
+          // After the headers, the abort lands on the bodies instead.
+          this.#bodies.abort(callId, reason);
+          if (this.#calls.delete(callId)) reject(reason);
         };
         signal.addEventListener("abort", onAbort, { once: true });
         pending.cleanup = () => signal.removeEventListener("abort", onAbort);
@@ -297,8 +305,12 @@ export class OffscreenWorker {
         url: req.url,
         request,
         body: toB64(body),
+        ...(streamBody ? { bodyStream: true as const } : {}),
         ...(forwarded ? { forwarded } : {}),
       });
+      // After the fetch message, so the offscreen side knows the call before
+      // its first pull arrives (port messages are delivered in order).
+      if (streamBody) this.#bodies.send("request", callId, streamBody);
     });
   }
 
@@ -339,6 +351,7 @@ export class OffscreenWorker {
       call.cleanup?.();
       call.reject(err);
     }
+    this.#bodies.closeAll(err);
     // §13.1: retained entries stay readable after the failure they explain.
     this.#logs.close(err);
     this.#calls.clear();
