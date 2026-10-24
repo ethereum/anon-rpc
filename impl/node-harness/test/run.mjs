@@ -388,6 +388,96 @@ if (tcpConns !== 1) fail(`expected 1 TCP connection, got ${tcpConns}`);
 ok(`bridged socket carried a real connection ("${sock.bridged}"), closed: ${sock.closed}`);
 ok(`address policy refused a non-allow-listed destination (${sock.denied})`);
 
+/* --- 7b. §9.4 plain values cross the JSON-only boundary exactly ------- */
+
+// Nothing but JSON and bytes enters the isolate, and JSON alone would lose
+// undefined, NaN, -0 and bytes. Config (§7.1) and forwarded init entries
+// (§9.1) must still arrive as themselves.
+const plainSource = `
+(async () => {
+  const describe = (v) => {
+    if (v === undefined) return "undefined";
+    if (typeof v === "number") return Object.is(v, -0) ? "-0" : String(v);
+    if (v instanceof Uint8Array) return "u8:" + Array.from(v).join(",");
+    if (v instanceof ArrayBuffer) return "ab:" + Array.from(new Uint8Array(v)).join(",");
+    if (Array.isArray(v)) return v.map(describe);
+    if (v && typeof v === "object") {
+      const o = {};
+      for (const k of Object.keys(v)) o[k] = describe(v[k]);
+      return o;
+    }
+    return v;
+  };
+  const cfg = anonRpcWorker.config;
+  anonRpcWorker.signalReady();
+  for (;;) {
+    const call = await anonRpcWorker.acceptCall();
+    const init = call.requestInit;
+    const out = {
+      config: describe(cfg),
+      configHasUndef: Object.prototype.hasOwnProperty.call(cfg, "undef"),
+      method: init.method,
+      anonOptions: describe(init.anonOptions),
+      custom: describe(init.custom),
+      protoIsOwn: Object.prototype.hasOwnProperty.call(init, "__proto__"),
+      protoIntact: Object.getPrototypeOf(init) === Object.prototype,
+      envelope: "forwarded" in init,
+    };
+    call.respond({ status: 200, headers: [], body: new TextEncoder().encode(JSON.stringify(out)) });
+  }
+})();
+`;
+const plainPub = await publish(plainSource);
+const plainWorker = new AnonRpcWorker({
+  address: SPECIFIER,
+  preExisting: { rpcProvider: plainPub.provider },
+  capabilities: { fetch: false },
+  config: { undef: undefined, nan: NaN, negZero: -0, inf: -Infinity, bytes: Buffer.from([1, 2]), list: [1, , "x"] },
+});
+cleanups.push(() => plainWorker.close());
+await plainWorker.ready;
+const plain = await (
+  await plainWorker.fetch("http://report.invalid/", {
+    method: "POST",
+    anonOptions: { isolationKey: "account-1" },
+    custom: { ab: new Uint8Array([9]).buffer, n: null },
+    ...JSON.parse('{"__proto__": "own"}'),
+  })
+).json();
+const expectPlain = {
+  config: { undef: "undefined", nan: "NaN", negZero: "-0", inf: "-Infinity", bytes: "u8:1,2", list: ["1", "undefined", "x"] },
+  configHasUndef: true,
+  method: "POST",
+  anonOptions: { isolationKey: "account-1" },
+  custom: { ab: "ab:9", n: null },
+  protoIsOwn: true,
+  protoIntact: true,
+  envelope: false,
+};
+if (JSON.stringify(plain) !== JSON.stringify(expectPlain)) {
+  fail(`plain values did not arrive exactly:\n  got  ${JSON.stringify(plain)}\n  want ${JSON.stringify(expectPlain)}`);
+}
+ok("config and forwarded init entries arrived exactly: undefined, NaN, -0, bytes, __proto__ (§9.4)");
+
+let notPlainErr;
+try {
+  await plainWorker.fetch("http://report.invalid/", { anonOptions: { isolationKey: new Date() } });
+} catch (e) {
+  notPlainErr = e;
+}
+if (!(notPlainErr instanceof TypeError)) fail(`a non-plain forwarded entry did not reject with TypeError: ${notPlainErr}`);
+const cyclic = {};
+cyclic.self = cyclic;
+let ctorErr;
+try {
+  new AnonRpcWorker({ address: SPECIFIER, preExisting: { rpcProvider: plainPub.provider }, config: cyclic });
+} catch (e) {
+  ctorErr = e;
+}
+if (!(ctorErr instanceof TypeError)) fail(`a cyclic config did not throw TypeError from the constructor: ${ctorErr}`);
+ok(`non-plain values are refused: fetch rejects, constructor throws (${ctorErr.message})`);
+plainWorker.close();
+
 /* --- 8. resource limits, which node:vm has no usable form of ----------- */
 
 // A guest that never yields, never returns, or eats all the memory it can.

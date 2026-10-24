@@ -17,15 +17,16 @@
 // read the policy as a constraint on the worker there today.
 
 import { AnonRpcWorker as BrowserHarnessWorker } from "@anon-rpc/browser-harness";
-import type { LogEntry } from "@anon-rpc/browser-harness";
+import type { AnonFetch, LogEntry } from "@anon-rpc/browser-harness";
 import { assertAssetPresent } from "../background/assets.js";
 import { DEFAULT_IFRAME_URL, type ExtensionWorkerInit } from "../background/OffscreenWorker.js";
 import { chromeApi } from "../chrome-types.js";
 import { resolveIframeUrl } from "../iframe-url.js";
+import { copyPlain } from "../wire.js";
 
 export class PageWorker {
   readonly ready: Promise<void>;
-  fetch: typeof fetch;
+  fetch: AnonFetch;
 
   #inner: Promise<BrowserHarnessWorker>;
 
@@ -35,6 +36,10 @@ export class PageWorker {
    * booted worker from), and `iframeUrl` should be listed in `sandbox.pages`.
    */
   constructor(init: ExtensionWorkerInit) {
+    // §7.1: checked here, synchronously — the browser harness would check it
+    // too, but only once the asset check below lets it be constructed, which
+    // would turn the constructor's TypeError into a rejected `ready`.
+    const config = copyPlain(init.config, "config");
     // An absolute URL passes through untouched, so a cross-origin one reaches
     // the browser harness's §6 same-origin check instead of being rewritten
     // into a same-origin-looking extension URL (see resolveIframeUrl).
@@ -46,7 +51,7 @@ export class PageWorker {
       // `ready` that never settles (assets.ts). Only our own pages are checked;
       // anything else is §6's to reject, with §6's message.
       if (isOwnPage) await assertAssetPresent(iframeUrl, "sandboxed page");
-      const { address, config, preExisting } = init;
+      const { address, preExisting } = init;
       return new BrowserHarnessWorker({ address, config, preExisting, iframeUrl });
     })();
 

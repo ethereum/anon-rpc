@@ -64,8 +64,9 @@ Everything your code gets is on the global `anonRpcWorker` (SPEC §7):
   What KPS buys is direct connections to nodes without the blessing of
   certificate authorities or domain registrars — a substantial gain in
   censorship resistance.
-- **`config`** — whatever the wallet passed at construction, structured-clone
-  intact, schema entirely yours. Typical use: entry node addresses, chain
+- **`config`** — whatever the wallet passed at construction, delivered
+  exactly as a plain value (JSON plus `undefined`, `Uint8Array` and
+  `ArrayBuffer`; SPEC §9.4), schema entirely yours. Typical use: entry node addresses, chain
   selection, tuning. **Document your schema for wallets.**
 - **`storage`** — async binary KV, namespaced to your specifier address,
   persistent across restarts and page reloads. Directory descriptors, cached
@@ -77,6 +78,16 @@ Everything your code gets is on the global `anonRpcWorker` (SPEC §7):
   call `signalFailed({ code: "your-code", message: "…" })` instead of hanging:
   the wallet's `ready` rejects with your `code` to branch on. Failure is
   final; after it, nothing will be delivered.
+
+### Per-call options
+
+`call.requestInit` carries more than the request. Any key of the wallet's
+`fetch` init that the spec doesn't model arrives there too, as a plain value
+(SPEC §9.1). The spec defines one, `anonOptions.isolationKey`: the wallet's
+intent that calls made under different keys not be linkable to one another,
+as if made by unrelated clients. Whether and how your worker acts on it —
+separate circuits, routes, connections — is up to you; if it does, say so in
+the docs you write for wallets.
 
 ### Conformance (SPEC §3.2)
 

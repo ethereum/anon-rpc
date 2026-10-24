@@ -123,6 +123,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(m.body),
+        // §9.3: addressed to the worker, not the destination.
+        ...(m.isolationKey ? { anonOptions: { isolationKey: m.isolationKey } } : {}),
       });
       respond({ ok: true, status: res.status, json: await res.json() });
     } catch (e) {

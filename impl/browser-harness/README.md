@@ -5,7 +5,7 @@ A browser harness for [anon-rpc](https://github.com/ethereum/anon-rpc)
 by running hash-pinned anon-client code inside a sandboxed worker.
 
 Implements the [anon-rpc specification](https://ethereum.github.io/anon-rpc/spec/)
-version **0.3.2**. (The package version is kept `>=` the implemented spec
+version **0.4.0**. (The package version is kept `>=` the implemented spec
 version; a package release without a spec change bumps past it.)
 
 The harness:
@@ -36,8 +36,9 @@ import { AnonRpcWorker } from "@anon-rpc/browser-harness";
 const worker = new AnonRpcWorker({
   // The IWorkerSpecifier contract identifying the anon-client by hash.
   address: "0x…",
-  // Optional: structured-cloneable value delivered to the worker as
-  // `anonRpcWorker.config`. Opaque to the harness; schema is the worker's.
+  // Optional: a plain value (JSON, plus undefined, Uint8Array, ArrayBuffer)
+  // delivered to the worker exactly as `anonRpcWorker.config`. Opaque to the
+  // harness; schema is the worker's. Anything else throws a TypeError here.
   config: { network: "mainnet" },
   // Bootstrap provider used only to read the specifier (breaks the circular
   // "need the chain to reach the chain" dependency).
@@ -57,6 +58,19 @@ const res = await worker.fetch("https://rpc.example/", {
 
 worker.close(); // tears down the iframe and worker
 ```
+
+### Per-call options
+
+`anonOptions` in a `fetch` init is passed to the worker, not the destination
+(SPEC §9.3):
+
+```ts
+await worker.fetch(url, { method: "POST", body, anonOptions: { isolationKey: "account-1" } });
+```
+
+`isolationKey` asks that calls under different keys not be linkable to one
+another. Support varies — check what your network does with this key if it's
+important to you.
 
 ### Collecting the worker's logs
 

@@ -18,16 +18,18 @@
 // hands the same one back, so a reconnect costs a message rather than a
 // specifier read, a bundle fetch and a keccak verification.
 
-import type { LogEntry, RpcProvider, WorkerInit } from "@anon-rpc/browser-harness";
+import type { AnonFetch, LogEntry, RpcProvider, WorkerInit } from "@anon-rpc/browser-harness";
 import { ensureOffscreenDocument } from "./offscreen.js";
 import { chromeApi, type RuntimePort } from "../chrome-types.js";
 import {
   PORT_NAME,
+  encodePlain,
   fromB64,
   toB64,
   toWireError,
   type FromOffscreen,
   type ToOffscreen,
+  type WirePlain,
   type WireRequest,
 } from "../wire.js";
 import { ASSET_PATH, assertAssetPresent } from "./assets.js";
@@ -87,9 +89,12 @@ type Pending = {
   cleanup?: () => void;
 };
 
+// The init members §9.1 models; every other key is a forwarded entry.
+const MODELED = new Set(["method", "headers", "body", "redirect", "signal"]);
+
 export class OffscreenWorker {
   readonly ready: Promise<void>;
-  fetch: typeof fetch;
+  fetch: AnonFetch;
 
   #port?: RuntimePort;
   #provider?: RpcProvider;
@@ -106,6 +111,9 @@ export class OffscreenWorker {
   #logsClaimed = false;
 
   constructor(init: ExtensionWorkerInit) {
+    // §7.1: a config that is not a §9.4 plain value fails construction. Encoded
+    // now, so later host mutation cannot reach the worker.
+    const config = encodePlain(init.config, "config");
     this.ready = new Promise<void>((res, rej) => {
       this.#readyResolve = res;
       this.#readyReject = rej;
@@ -115,10 +123,10 @@ export class OffscreenWorker {
     this.ready.catch(() => {});
     // §5: `fetch` MUST be this-bound so it works as a free function.
     this.fetch = this.#fetch.bind(this);
-    this.#boot(init).catch((e) => this.#fail(e));
+    this.#boot(init, config).catch((e) => this.#fail(e));
   }
 
-  async #boot(init: ExtensionWorkerInit): Promise<void> {
+  async #boot(init: ExtensionWorkerInit, config: WirePlain): Promise<void> {
     const provider = init.preExisting?.rpcProvider;
     if (!provider) throw new Error("preExisting.rpcProvider is required to read the specifier (§4)");
     this.#provider = provider;
@@ -157,7 +165,7 @@ export class OffscreenWorker {
     this.#send({
       t: "boot",
       address: init.address,
-      config: init.config,
+      config,
       iframeUrl,
       reuse: init.reuse ?? true,
     });
@@ -237,8 +245,11 @@ export class OffscreenWorker {
     }
   }
 
-  async #fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  async #fetch(input: RequestInfo | URL, init?: Parameters<AnonFetch>[1]): Promise<Response> {
     if (this.#failure !== undefined) throw this.#failure;
+    // Before any await: §9.1 copies forwarded values when fetch is called, and
+    // one that is not plain fails this fetch rather than being dropped.
+    const forwarded = forwardedEntries(init);
 
     const req = input instanceof Request && !init ? input : new Request(input as RequestInfo, init);
     const headers: [string, string][] = [];
@@ -280,7 +291,14 @@ export class OffscreenWorker {
         pending.cleanup = () => signal.removeEventListener("abort", onAbort);
       }
 
-      this.#send({ t: "fetch", callId, url: req.url, request, body: toB64(body) });
+      this.#send({
+        t: "fetch",
+        callId,
+        url: req.url,
+        request,
+        body: toB64(body),
+        ...(forwarded ? { forwarded } : {}),
+      });
     });
   }
 
@@ -332,4 +350,18 @@ function rehydrate(e: { name: string; message: string; code?: string }): Error {
   err.name = e.name;
   if (e.code) (err as Error & { code: string }).code = e.code;
   return err;
+}
+
+/**
+ * §9.1: every own enumerable string-keyed init entry §9.1 does not model, as
+ * one encoded object. Only init contributes — a Request keeps none of them.
+ */
+function forwardedEntries(init: RequestInit | undefined): WirePlain | undefined {
+  if (!init) return undefined;
+  const out: ["o", ...(string | WirePlain)[]] = ["o"];
+  for (const key of Object.keys(init)) {
+    if (MODELED.has(key)) continue;
+    out.push(key, encodePlain((init as Record<string, unknown>)[key], `init.${key}`));
+  }
+  return out.length > 1 ? out : undefined;
 }

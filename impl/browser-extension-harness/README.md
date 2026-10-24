@@ -6,7 +6,7 @@ or application make **anonymized RPC requests** by running hash-pinned
 anon-client code inside a sandboxed worker.
 
 Implements the [anon-rpc specification](https://ethereum.github.io/anon-rpc/spec/)
-version **0.3.2**. (The package version is kept `>=` the implemented spec
+version **0.4.0**. (The package version is kept `>=` the implemented spec
 version; a package release without a spec change bumps past it.)
 
 This is a variant of [`@anon-rpc/browser-harness`](../browser-harness), not a

@@ -299,7 +299,7 @@ export type AnonRequestInit = {
 // The host-side fetch (§5). Assignable to `typeof fetch`.
 export type AnonFetch = (
   input: RequestInfo | URL,
-  init?: RequestInit & { anonOptions?: AnonOptions; [key: string]: unknown },
+  init?: RequestInit & { anonOptions?: AnonOptions },
 ) => Promise<Response>;
 ```
 

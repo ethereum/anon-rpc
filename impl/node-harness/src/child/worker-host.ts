@@ -189,7 +189,9 @@ function buildApi(config: unknown, capabilities: { socket: boolean }): AnonRpcWo
       return call;
     },
 
-    config,
+    // Superseded path (build.mjs): no live host sends it config, so it is not
+    // brought up to §9.4 — it receives whatever it is given.
+    config: config as AnonRpcWorkerApi["config"],
     kps,
     storage,
     log: {

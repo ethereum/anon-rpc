@@ -113,3 +113,58 @@ test("init overrides a Request input's fields", async () => {
   assert.equal(n.requestInit?.method, "PUT");
   assert.equal(await drain(n.requestInit?.body), "override");
 });
+
+test("init entries §9.1 does not model are forwarded as plain values", async () => {
+  const anonOptions = { isolationKey: "k1" };
+  const n = await normalizeRequest("http://x.test/", {
+    method: "POST",
+    cache: "no-store",
+    anonOptions,
+    custom: { bytes: new Uint8Array([1]), missing: undefined },
+  } as RequestInit);
+  assert.deepEqual(n.requestInit?.forwarded, {
+    cache: "no-store",
+    anonOptions: { isolationKey: "k1" },
+    custom: { bytes: new Uint8Array([1]), missing: undefined },
+  });
+  assert.notEqual(n.requestInit?.forwarded?.anonOptions, anonOptions, "copied, not shared");
+  assert.equal(n.requestInit?.method, "POST");
+  assert.ok(!("method" in (n.requestInit?.forwarded ?? {})), "modeled fields are not forwarded");
+});
+
+test("an init with no forwarded entries carries none", async () => {
+  const n = await normalizeRequest("http://x.test/", { method: "GET" });
+  assert.equal(n.requestInit?.forwarded, undefined);
+});
+
+test("forwarded values are copied when fetch is called, before any await", async () => {
+  const anonOptions = { isolationKey: "before" };
+  const pending = normalizeRequest("http://x.test/", {
+    method: "POST",
+    body: new Blob(["buffered asynchronously"]),
+    anonOptions,
+  } as RequestInit);
+  anonOptions.isolationKey = "after";
+  const n = await pending;
+  assert.deepEqual(n.requestInit?.forwarded, { anonOptions: { isolationKey: "before" } });
+});
+
+test("a forwarded value that is not plain rejects with a TypeError", async () => {
+  await assert.rejects(
+    normalizeRequest("http://x.test/", { anonOptions: { isolationKey: 1n } } as unknown as RequestInit),
+    { name: "TypeError", message: /init\.anonOptions\.isolationKey/ },
+  );
+  const cyclic: Record<string, unknown> = {};
+  cyclic.self = cyclic;
+  await assert.rejects(
+    normalizeRequest("http://x.test/", { custom: cyclic } as RequestInit),
+    TypeError,
+  );
+});
+
+test("Request input: only init contributes forwarded entries", async () => {
+  const req = new Request("http://x.test/req", { anonOptions: { isolationKey: "lost" } } as RequestInit);
+  assert.equal((await normalizeRequest(req)).requestInit?.forwarded, undefined);
+  const n = await normalizeRequest(req, { anonOptions: { isolationKey: "k" } } as RequestInit);
+  assert.deepEqual(n.requestInit?.forwarded, { anonOptions: { isolationKey: "k" } });
+});

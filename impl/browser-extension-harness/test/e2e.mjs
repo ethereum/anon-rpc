@@ -117,6 +117,9 @@ const probeBundle = Buffer.from(
   anonRpcWorker.signalReady();
   for (;;) {
     const call = await anonRpcWorker.acceptCall();
+    // §9.1: forwarded init entries must survive the JSON-only hop too.
+    const opts = call.requestInit && call.requestInit.anonOptions;
+    out.isolationKey = opts ? opts.isolationKey : "(no anonOptions)";
     call.respond({ status: 200, headers: [], body: new TextEncoder().encode(JSON.stringify(out)) });
   }
 })();
@@ -404,7 +407,9 @@ ok("a second call reused the booted worker — no re-read, no re-fetch, no re-ve
 // page takes the address from its query string, so this is the same extension
 // and the same harness — only the worker differs.
 const probePage = await context.newPage();
-await probePage.goto(`chrome-extension://${extensionId}/page.html?address=${SPECIFIER_PROBE}`);
+await probePage.goto(
+  `chrome-extension://${extensionId}/page.html?address=${SPECIFIER_PROBE}&isolationKey=account-1`,
+);
 await probePage
   .waitForFunction(() => document.getElementById("out")?.textContent !== "pending", { timeout: 60_000 })
   .catch(() => {});
@@ -425,6 +430,11 @@ if (env.chrome !== "undefined") {
   await fail(`worker code can see the extension API: chrome is ${env.chrome} (${JSON.stringify(env)})`);
 }
 ok(`worker code cannot reach the extension API (typeof chrome === "${env.chrome}")`);
+
+if (env.isolationKey !== "account-1") {
+  await fail(`anonOptions did not survive the offscreen hop: isolationKey is ${env.isolationKey}`);
+}
+ok("anonOptions crossed the service worker → offscreen hop intact (§9.1, §9.3)");
 
 if (env.origin !== "null") {
   await fail(`worker origin is ${env.origin}, expected "null" (${JSON.stringify(env)})`);

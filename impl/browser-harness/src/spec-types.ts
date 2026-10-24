@@ -12,9 +12,9 @@ export type RpcProvider = {
 export type WorkerInit = {
   // The specifier contract address.
   address: string;
-  // Delivered to the worker as `anonRpcWorker.config` (§7.1). Structured-
-  // cloneable; opaque to the harness — its schema is defined by the worker.
-  config?: unknown;
+  // Delivered to the worker as `anonRpcWorker.config` (§7.1). A plain value
+  // (§9.4); opaque to the harness — its schema is defined by the worker.
+  config?: PlainValue;
   // Where a browser harness loads its null-origin document from, for an
   // embedder whose CSP will not let the harness construct one inline (§6).
   // A harness that does not use an iframe MUST ignore it.
@@ -34,9 +34,9 @@ export type AnonRpcWorkerApi = {
   // code/message on the error. Failure is final.
   signalFailed(reason?: { code?: string; message?: string }): void;
   acceptCall(opts?: { signal?: AbortSignal }): Promise<IncomingCall>;
-  // The host's WorkerInit.config (§7.1): a structured clone, fixed for the
-  // worker's lifetime; undefined when the host supplied none.
-  config: unknown;
+  // The host's WorkerInit.config (§7.1): a §9.4 copy, fixed for the worker's
+  // lifetime; undefined when the host supplied none.
+  config: PlainValue;
   kps: KpsApi;
   storage: StorageApi;
   log: LogApi;
@@ -65,7 +65,35 @@ export type AnonRequestInit = {
   body?: ByteBody;
   redirect?: "follow" | "manual" | "error";
   signal?: AbortSignal;
+  anonOptions?: AnonOptions;
+  // Forwarded entries (§9.1): every other key of the host's fetch init.
+  [key: string]: unknown;
 };
+
+/** §9.3: per-call options addressed to the worker, not the destination. */
+export type AnonOptions = {
+  // Calls under different keys should not be linkable to one another.
+  isolationKey?: string;
+  [key: string]: PlainValue;
+};
+
+/** §9.4: the value domain every harness boundary carries identically. */
+export type PlainValue =
+  | undefined
+  | null
+  | boolean
+  | number
+  | string
+  | Uint8Array
+  | ArrayBuffer
+  | PlainValue[]
+  | { [key: string]: PlainValue };
+
+/** §5/§9.1: the host-side fetch. Assignable to `typeof fetch`. */
+export type AnonFetch = (
+  input: RequestInfo | URL,
+  init?: RequestInit & { anonOptions?: AnonOptions },
+) => Promise<Response>;
 
 export type AnonFetchResponse = {
   status: number;

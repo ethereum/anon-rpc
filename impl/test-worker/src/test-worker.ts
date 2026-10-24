@@ -57,6 +57,16 @@ async function handleCall(url: string, init?: AnonRequestInit): Promise<AnonFetc
   if (anonRpcWorker.config !== undefined) {
     resp.headers.push(["x-anon-rpc-config", JSON.stringify(anonRpcWorker.config)]);
   }
+  // §9.1/§9.3: forwarded init entries reach the worker. `bytes` is described
+  // rather than stringified so the e2e sees it arrived as a Uint8Array.
+  if (init?.anonOptions !== undefined) {
+    resp.headers.push(["x-anon-rpc-anon-options", JSON.stringify(init.anonOptions)]);
+  }
+  if (init?.custom !== undefined) {
+    const { bytes, ...rest } = init.custom as { bytes?: unknown };
+    const described = { ...rest, bytes: bytes instanceof Uint8Array ? `u8:${[...bytes].join(",")}` : typeof bytes };
+    resp.headers.push(["x-anon-rpc-custom", JSON.stringify(described)]);
+  }
   return resp;
 }
 

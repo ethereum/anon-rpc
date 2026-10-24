@@ -19,6 +19,7 @@ import type {
   StorageKey,
   LogApi,
   LogArg,
+  PlainValue,
 } from "../spec-types.js";
 import { PortRpc, serializeError } from "../protocol.js";
 
@@ -28,13 +29,19 @@ type StreamParts = {
   writable: WritableStream<Uint8Array>;
 };
 
+// The host's WireRequestInit (normalize-request.ts), as it crosses the port.
+type WireRequestInit = Pick<AnonRequestInit, "method" | "headers" | "body" | "redirect"> & {
+  hasSignal?: boolean;
+  forwarded?: { [key: string]: PlainValue };
+};
+
 type AcceptedCall = {
   callId: number;
   url: string;
-  requestInit?: AnonRequestInit & { hasSignal?: boolean };
+  requestInit?: WireRequestInit;
 };
 
-export function makeWorkerApi(rpc: PortRpc, config?: unknown): AnonRpcWorkerApi {
+export function makeWorkerApi(rpc: PortRpc, config?: PlainValue): AnonRpcWorkerApi {
   // AbortControllers for delivered calls; host emits "call-abort" when its
   // fetch caller aborts (the call's signal originates host-side). An abort can
   // race the acceptCall response across the port, so aborts for calls not yet
@@ -178,16 +185,19 @@ function makeFetchCall(
   preAborted: Set<number>,
   callId: number,
   url: string,
-  wireInit?: AnonRequestInit & { hasSignal?: boolean },
+  wireInit?: WireRequestInit,
 ): FetchCall {
   let requestInit: AnonRequestInit | undefined;
   if (wireInit) {
-    const { hasSignal, ...rest } = wireInit;
-    requestInit = rest;
+    const { hasSignal, forwarded, ...rest } = wireInit;
+    // §9.1: forwarded entries sit beside the modeled fields, under their own
+    // keys (never a modeled one — the host excluded those). Spread defines
+    // properties, so a forwarded "__proto__" stays an own key.
+    requestInit = { ...forwarded, ...rest };
     if (hasSignal) {
       const ac = new AbortController();
       callAborts.set(callId, ac);
-      requestInit = { ...rest, signal: ac.signal };
+      requestInit = { ...requestInit, signal: ac.signal };
       // The host's abort may have crossed the port before this call arrived.
       if (preAborted.delete(callId)) ac.abort(new DOMException("aborted", "AbortError"));
     }

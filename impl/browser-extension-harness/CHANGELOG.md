@@ -4,6 +4,24 @@ Changes to this package by version. Specification changes are in the
 [specification changelog](https://github.com/ethereum/anon-rpc/blob/main/CHANGELOG.md);
 this package implements the spec version named in its README.
 
+## 0.4.0 — 2026-10-23
+
+Implements spec 0.4.0. Requires `@anon-rpc/browser-harness` 0.4.0
+(pinned exactly).
+
+- **Added: per-call options.** Keys of a `fetch` init that the spec does not
+  model — `anonOptions`, and anything else — are forwarded to the worker
+  rather than dropped (§9.1). Both modes carry them: in-page through the browser
+  harness, and over the service worker → offscreen hop, whose JSON-only
+  messaging needed a tagged encoding so `undefined`, NaN, -0 and bytes arrive as
+  themselves.
+- **Changed (breaking): `config` must be a §9.4 plain value** — JSON, plus
+  `undefined`, `Uint8Array` and `ArrayBuffer`. Anything else, or a cyclic
+  value, makes the constructor throw a `TypeError`. Configs that previously
+  crossed the JSON hop lossily (a `Uint8Array`, an `undefined` property) now
+  arrive exactly, and the offscreen worker cache keys on that exact value.
+- `fetch` is typed `AnonFetch` (re-exported from the browser harness).
+
 ## 0.3.3 — 2026-10-13
 
 Implements spec 0.3.2 (unchanged). Requires `@anon-rpc/browser-harness` 0.3.3

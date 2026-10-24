@@ -23,15 +23,30 @@ import { fetchAndVerifyBundle, readSpecifier } from "./specifier.js";
 import { Rpc, RpcError, abortError, type PortLike } from "../protocol.js";
 import type { GuestPayload, GuestReply } from "../child/isolate-thread.js";
 import type {
+  AnonFetch,
   AnonFetchResponse,
   AnonRequestInit,
   HeaderList,
   LogEntry,
   WorkerInit,
 } from "../spec-types.js";
+import { encodePlain, type WirePlain } from "../plain-value.js";
 
 /** §13.1 retention bound; see the browser harness for the sizing note. */
 const LOG_RETENTION = 1000;
+
+// The init members §9.1 models; every other key is a forwarded entry.
+const MODELED = new Set(["method", "headers", "body", "redirect", "signal"]);
+
+/**
+ * A §9 request as it crosses to the guest: the modeled fields, plus §9.1's
+ * forwarded entries encoded for the JSON boundary. Kept apart so a host key
+ * cannot collide with the wire's own.
+ */
+type WireRequestInit = Omit<AnonRequestInit, "signal" | "anonOptions"> & {
+  body?: Uint8Array;
+  forwarded?: WirePlain;
+};
 
 export { RpcError } from "../protocol.js";
 export type { IsolateLimits } from "./isolation.js";
@@ -91,7 +106,7 @@ export type NodeWorkerInit = WorkerInit & {
 type PendingCall = {
   id: number;
   url: string;
-  wire?: AnonRequestInit;
+  wire?: WireRequestInit;
   signal?: AbortSignal;
   resolve: (r: AnonFetchResponse) => void;
   reject: (e: unknown) => void;
@@ -117,20 +132,23 @@ export class AnonRpcWorker {
   #disposers: (() => void)[] = [];
 
   constructor(init: NodeWorkerInit) {
+    // §7.1: a config that is not a §9.4 plain value fails construction. Encoded
+    // now, so later host mutation cannot reach the worker.
+    const config = encodePlain(init.config, "config");
     this.ready = new Promise<void>((res, rej) => {
       this.#resolveReady = res;
       this.#rejectReady = rej;
     });
     // Calls made before `ready` resolves are buffered rather than dropped
     // (§8), so boot failures surface through `ready` and through those calls.
-    this.#boot(init).catch((e) => this.#fail(e instanceof Error ? e : new Error(String(e))));
+    this.#boot(init, config).catch((e) => this.#fail(e instanceof Error ? e : new Error(String(e))));
 
     // `fetch` is handed to viem/ethers/whatever as a free function, so it must
     // not depend on how it is called.
     this.fetch = this.fetch.bind(this);
   }
 
-  async #boot(init: NodeWorkerInit): Promise<void> {
+  async #boot(init: NodeWorkerInit, config: WirePlain): Promise<void> {
     const provider = init.preExisting?.rpcProvider;
     if (!provider) {
       throw new Error("preExisting.rpcProvider is required to read the specifier (§4)");
@@ -182,7 +200,7 @@ export class AnonRpcWorker {
 
     rpc.emit("init", {
       bundle,
-      config: init.config,
+      config,
       address: init.address,
       capabilities,
       limits: init.limits,
@@ -276,7 +294,7 @@ export class AnonRpcWorker {
    * A standard `fetch`, routed through the isolated worker. Calls made before
    * the worker is ready are buffered in order (§8), not dropped.
    */
-  async fetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+  async fetch(input: string | URL | Request, init?: Parameters<AnonFetch>[1]): Promise<Response> {
     if (this.#dead) throw this.#dead;
 
     const { url, wire, signal } = await normalizeRequest(input, init);
@@ -387,20 +405,38 @@ function threadPort(isolate: SpawnedIsolate): PortLike {
 async function normalizeRequest(
   input: string | URL | Request,
   init?: RequestInit,
-): Promise<{ url: string; wire: AnonRequestInit; signal?: AbortSignal }> {
+): Promise<{ url: string; wire: WireRequestInit; signal?: AbortSignal }> {
+  // Before any await: §9.1 copies forwarded values when fetch is called, and
+  // one that is not plain fails this fetch rather than being dropped.
+  const forwarded = forwardedEntries(init);
   const req = input instanceof Request && !init ? input : new Request(input, init);
   const headers: HeaderList = [];
   req.headers.forEach((v, k) => headers.push([k, v]));
 
-  const wire: AnonRequestInit = { method: req.method };
+  const wire: WireRequestInit = { method: req.method };
   if (headers.length) wire.headers = headers;
   if (req.method !== "GET" && req.method !== "HEAD") {
     const buf = await req.arrayBuffer();
     if (buf.byteLength) wire.body = new Uint8Array(buf);
   }
   if (init?.redirect) wire.redirect = init.redirect;
+  if (forwarded) wire.forwarded = forwarded;
 
   // The signal is returned alongside, never inside `wire`: the guest gets one
   // it synthesises from call.abort.
   return { url: req.url, wire, signal: init?.signal ?? undefined };
+}
+
+/**
+ * §9.1: every own enumerable string-keyed init entry §9.1 does not model, as
+ * one encoded object. Only init contributes — a Request keeps none of them.
+ */
+function forwardedEntries(init: RequestInit | undefined): WirePlain | undefined {
+  if (!init) return undefined;
+  const out: ["o", ...(string | WirePlain)[]] = ["o"];
+  for (const key of Object.keys(init)) {
+    if (MODELED.has(key)) continue;
+    out.push(key, encodePlain((init as Record<string, unknown>)[key], `init.${key}`));
+  }
+  return out.length > 1 ? out : undefined;
 }

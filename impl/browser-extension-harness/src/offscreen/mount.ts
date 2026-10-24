@@ -24,7 +24,9 @@ import { AnonRpcWorker } from "@anon-rpc/browser-harness";
 import type { RpcProvider } from "@anon-rpc/browser-harness";
 import {
   PORT_NAME,
+  decodePlain,
   fromB64,
+  plainKey,
   toB64,
   toWireError,
   type FromOffscreen,
@@ -143,7 +145,7 @@ function serve(port: RuntimePort, cache: Map<string, Entry>, idleMs: number): vo
         // constructed, and leaving it out meant a caller asking for a
         // different isolation document silently got a worker built with the
         // previous one.
-        const cacheKey = `${msg.address.toLowerCase()}::${msg.iframeUrl}::${stableStringify(msg.config)}`;
+        const cacheKey = `${msg.address.toLowerCase()}::${msg.iframeUrl}::${plainKey(msg.config)}`;
         key = cacheKey;
         const hit = msg.reuse ? cache.get(cacheKey) : undefined;
         if (hit) {
@@ -155,7 +157,7 @@ function serve(port: RuntimePort, cache: Map<string, Entry>, idleMs: number): vo
           cache.get(cacheKey)?.worker.close(); // a re-boot replaces any existing one
           const worker = new AnonRpcWorker({
             address: msg.address,
-            config: msg.config,
+            config: decodePlain(msg.config),
             preExisting: { rpcProvider: provider },
             iframeUrl: msg.iframeUrl,
           });
@@ -191,6 +193,8 @@ function serve(port: RuntimePort, cache: Map<string, Entry>, idleMs: number): vo
         const body = fromB64(msg.body);
         void entry.worker
           .fetch(msg.url, {
+            // §9.1 forwarded entries first: none of them is a modeled key.
+            ...(msg.forwarded ? (decodePlain(msg.forwarded) as object) : {}),
             method: msg.request.method,
             headers: msg.request.headers,
             ...(body ? { body: body as BodyInit } : {}),
@@ -304,19 +308,4 @@ function renderLogArg(a: unknown): string {
   } catch {
     return String(a);
   }
-}
-
-/**
- * Key-order-independent JSON, so `{a:1,b:2}` and `{b:2,a:1}` are one cache
- * entry. Two structurally identical configs producing two workers would be a
- * silent doubling of everything the harness does.
- */
-function stableStringify(v: unknown): string {
-  if (v === undefined) return " undefined";
-  return JSON.stringify(v, (_k, val) => {
-    if (val && typeof val === "object" && !Array.isArray(val)) {
-      return Object.fromEntries(Object.entries(val as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : 1)));
-    }
-    return val;
-  });
 }

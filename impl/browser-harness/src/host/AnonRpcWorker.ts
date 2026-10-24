@@ -4,7 +4,7 @@
 // §6 isolation (Web Worker inside a null-origin sandboxed iframe), implement the
 // capability API for the worker, and expose `fetch` to the host.
 
-import type { WorkerInit, AnonFetchResponse, LogEntry } from "../spec-types.js";
+import type { WorkerInit, AnonFetch, AnonFetchResponse, LogEntry, PlainValue } from "../spec-types.js";
 import { PortRpc, RpcError, type SerializedError } from "../protocol.js";
 import { readSpecifier, fetchAndVerifyBundle } from "./specifier.js";
 import { registerKpsBridge } from "./kps-bridge-host.js";
@@ -12,6 +12,7 @@ import { CallQueue } from "./call-queue.js";
 import { LogQueue } from "./log-queue.js";
 import { normalizeRequest, type WireRequestInit } from "./normalize-request.js";
 import { openStorageBackend, type StorageBackend } from "./idb-storage.js";
+import { copyPlainValue } from "../plain-value.js";
 
 // Injected at build time (see build.mjs): source text the null-origin iframe
 // blob-spawns, since an opaque-origin iframe cannot load host-origin scripts.
@@ -41,9 +42,10 @@ type CallRecord = {
 
 export class AnonRpcWorker {
   ready: Promise<void>;
-  fetch: typeof fetch;
+  fetch: AnonFetch;
 
   #init: WorkerInit;
+  #config: PlainValue;
   #rpc?: PortRpc;
   #iframe?: HTMLIFrameElement;
   #disposeKps?: () => void;
@@ -70,6 +72,9 @@ export class AnonRpcWorker {
 
   constructor(init: WorkerInit) {
     this.#init = init;
+    // §7.1: a config that is not a §9.4 plain value fails construction, before
+    // anything boots. Copied now, so later host mutation cannot reach the worker.
+    this.#config = copyPlainValue(init.config, "config");
     this.ready = new Promise<void>((res, rej) => {
       this.#readyResolve = res;
       this.#readyReject = rej;
@@ -142,10 +147,10 @@ export class AnonRpcWorker {
     document.body.appendChild(iframe);
     await ready;
 
-    // §7.1: config rides the init message — postMessage structured-clones it,
-    // which is exactly the delivery semantic the spec requires.
+    // §7.1: config rides the init message. It is already a §9.4 copy, and
+    // structured clone carries every plain value unchanged.
     iframe.contentWindow!.postMessage(
-      { kind: "init", runtimeSource: __WORKER_RUNTIME_SRC__, bundleBytes, config: this.#init.config },
+      { kind: "init", runtimeSource: __WORKER_RUNTIME_SRC__, bundleBytes, config: this.#config },
       "*",
       [channel.port2],
     );
@@ -253,7 +258,7 @@ export class AnonRpcWorker {
     });
   }
 
-  async #fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  async #fetch(input: RequestInfo | URL, init?: Parameters<AnonFetch>[1]): Promise<Response> {
     if (this.#failure !== undefined) throw this.#failure;
     const { url, requestInit, transfer, signal: hostSignal } = await normalizeRequest(input, init);
     const callId = this.#nextCallId++;

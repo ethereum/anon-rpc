@@ -82,6 +82,33 @@ test("acceptCall delivers a fetch call; respond round-trips the response", async
   }
 });
 
+test("forwarded entries sit beside the modeled fields in requestInit (§9.1)", async () => {
+  const { host, api, close } = setup();
+  try {
+    host.on("acceptCall", () => ({
+      value: {
+        callId: 1,
+        url: "https://t.test/",
+        requestInit: {
+          method: "POST",
+          // With a signal: that path rebuilds requestInit, and must keep these.
+          hasSignal: true,
+          forwarded: JSON.parse('{"anonOptions": {"isolationKey": "k"}, "__proto__": 1}'),
+        },
+      },
+    }));
+    const call = await api.acceptCall();
+    assert.equal(call.requestInit?.method, "POST");
+    assert.deepEqual(call.requestInit?.anonOptions, { isolationKey: "k" });
+    assert.ok(Object.hasOwn(call.requestInit!, "__proto__"), "forwarded __proto__ stays an own key");
+    assert.equal(Object.getPrototypeOf(call.requestInit), Object.prototype);
+    assert.ok(!("forwarded" in call.requestInit!), "the wire envelope does not leak through");
+    assert.ok(call.requestInit?.signal instanceof AbortSignal);
+  } finally {
+    close();
+  }
+});
+
 test("a rejected respond carries name/message/code to the host (§12)", async () => {
   const { host, api, close } = setup();
   try {

@@ -14,6 +14,7 @@ async function go(): Promise<void> {
     const q = new URLSearchParams(location.search);
     const address = q.get("address") ?? undefined;
     const iframeUrl = q.get("iframeUrl") ?? undefined;
+    const isolationKey = q.get("isolationKey") ?? undefined;
     // ?logs=1 reads what the worker logged instead of making a call, so the
     // e2e can inspect the §13 path through the same page.
     if (q.has("logs")) {
@@ -25,6 +26,7 @@ async function go(): Promise<void> {
       type: "anon-fetch",
       address,
       iframeUrl,
+      isolationKey,
       body: { jsonrpc: "2.0", id: 1, method: "eth_blockNumber", params: [] },
     });
     out.textContent = JSON.stringify(res);

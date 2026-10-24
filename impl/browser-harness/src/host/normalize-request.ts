@@ -2,7 +2,8 @@
 // fetch`) into the wire shape sent to the worker (§9.1), plus the transfer
 // list and the effective abort signal.
 
-import type { AnonRequestInit, HeaderList } from "../spec-types.js";
+import type { AnonRequestInit, HeaderList, PlainValue } from "../spec-types.js";
+import { copyPlainValue } from "../plain-value.js";
 
 export type WireRequestInit = {
   method?: string;
@@ -12,7 +13,14 @@ export type WireRequestInit = {
   // The signal itself cannot cross the port; the worker reconstructs one and
   // the host drives it via "call-abort" events.
   hasSignal?: boolean;
+  // §9.1 forwarded entries, already §9.4 copies. Kept apart from the fields
+  // above so a host key such as "hasSignal" cannot collide with the wire's
+  // own; the worker spreads them into requestInit.
+  forwarded?: { [key: string]: PlainValue };
 };
+
+// The init members §9.1 models; every other key is a forwarded entry.
+const MODELED = new Set(["method", "headers", "body", "redirect", "signal"]);
 
 export type NormalizedRequest = {
   url: string;
@@ -25,6 +33,10 @@ export async function normalizeRequest(
   input: RequestInfo | URL,
   init?: RequestInit,
 ): Promise<NormalizedRequest> {
+  // Before any await: §9.1 copies forwarded values when fetch is called, so a
+  // host mutating them afterwards cannot change the call.
+  const forwarded = forwardedEntries(init);
+
   // A Request input carries method/headers/body/redirect/signal itself;
   // materialize it with any init overrides rather than reading init alone.
   if (input instanceof Request) {
@@ -40,6 +52,8 @@ export async function normalizeRequest(
       redirect: req.redirect,
       hasSignal: true, // a Request always has a signal
     };
+    // Only init contributes: a Request keeps none of these entries.
+    if (forwarded) requestInit.forwarded = forwarded;
     const transfer: Transferable[] = [];
     if (req.body) {
       requestInit.body = req.body;
@@ -88,8 +102,30 @@ export async function normalizeRequest(
   if (body !== undefined) requestInit.body = body;
   if (src.redirect) requestInit.redirect = src.redirect;
   if (src.signal) requestInit.hasSignal = true;
+  if (forwarded) requestInit.forwarded = forwarded;
 
   return { url, requestInit, transfer, signal: src.signal ?? undefined };
+}
+
+/**
+ * §9.1: every own enumerable string-keyed init entry §9.1 does not model,
+ * copied as a plain value. One that is not plain fails the whole fetch with a
+ * TypeError — dropping it would lose an option without anyone noticing.
+ */
+function forwardedEntries(init: RequestInit | undefined): WireRequestInit["forwarded"] {
+  if (!init) return undefined;
+  let out: WireRequestInit["forwarded"];
+  for (const key of Object.keys(init)) {
+    if (MODELED.has(key)) continue;
+    out ??= {};
+    Object.defineProperty(out, key, {
+      value: copyPlainValue((init as Record<string, unknown>)[key], `init.${key}`),
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+  }
+  return out;
 }
 
 function headersToList(h: HeadersInit | undefined): HeaderList | undefined {

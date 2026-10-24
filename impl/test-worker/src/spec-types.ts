@@ -16,9 +16,9 @@ export type AnonRpcWorkerApi = {
   // code/message on the error. Failure is final.
   signalFailed(reason?: { code?: string; message?: string }): void;
   acceptCall(opts?: { signal?: AbortSignal }): Promise<IncomingCall>;
-  // The host's WorkerInit.config (§7.1): a structured clone, fixed for the
-  // worker's lifetime; undefined when the host supplied none.
-  config: unknown;
+  // The host's WorkerInit.config (§7.1): a §9.4 copy, fixed for the worker's
+  // lifetime; undefined when the host supplied none.
+  config: PlainValue;
   kps: KpsApi;
   storage: StorageApi;
   log: LogApi;
@@ -47,7 +47,29 @@ export type AnonRequestInit = {
   body?: ByteBody;
   redirect?: "follow" | "manual" | "error";
   signal?: AbortSignal;
+  anonOptions?: AnonOptions;
+  // Forwarded entries (§9.1): every other key of the host's fetch init.
+  [key: string]: unknown;
 };
+
+/** §9.3: per-call options addressed to the worker, not the destination. */
+export type AnonOptions = {
+  // Calls under different keys should not be linkable to one another.
+  isolationKey?: string;
+  [key: string]: PlainValue;
+};
+
+/** §9.4: the value domain every harness boundary carries identically. */
+export type PlainValue =
+  | undefined
+  | null
+  | boolean
+  | number
+  | string
+  | Uint8Array
+  | ArrayBuffer
+  | PlainValue[]
+  | { [key: string]: PlainValue };
 
 export type AnonFetchResponse = {
   status: number;
