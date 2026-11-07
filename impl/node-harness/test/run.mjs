@@ -333,6 +333,62 @@ if (policed.rfc1918 !== "permission-denied") fail(`fetch reached RFC1918: ${JSON
 if (policed.file !== "permission-denied") fail(`fetch accepted a file:// URL: ${JSON.stringify(policed)}`);
 ok(`granted fetch refused loopback, RFC1918 and file:// by policy (${policed.loopback})`);
 
+// A redirect is a new destination and must pass the same check. A server the
+// policy allows (127.0.0.1) redirecting the guest to an address it does not
+// (127.0.0.2, still loopback) must not be followed; a redirect that stays on an
+// allowed address still is. Authorization survives a same-origin hop and is
+// dropped on a hop to another origin (here, another port), as fetch does.
+{
+  const echoAuth = (req, res) => void res.writeHead(200).end(req.headers.authorization ?? "none");
+  const other = createServer(echoAuth);
+  await new Promise((done) => other.listen(0, "127.0.0.1", done));
+  const otherPort = other.address().port;
+  const hop = createServer((req, res) => {
+    const port = hop.address().port;
+    if (req.url === "/same-auth") return void res.writeHead(302, { location: "/echo-auth" }).end();
+    if (req.url === "/cross-auth") return void res.writeHead(302, { location: `http://127.0.0.1:${otherPort}/echo-auth` }).end();
+    if (req.url === "/echo-auth") return echoAuth(req, res);
+    if (req.url === "/away") return void res.writeHead(302, { location: `http://127.0.0.2:${port}/secret` }).end();
+    if (req.url === "/stay") return void res.writeHead(302, { location: `http://127.0.0.1:${port}/fine` }).end();
+    res.writeHead(200).end(req.url === "/secret" ? "SECRET" : "FINE");
+  });
+  await new Promise((done) => hop.listen(0, "0.0.0.0", done));
+  const port = hop.address().port;
+  const redirected = await interrogate(
+    `
+(async () => {
+  const out = {};
+  try { const r = await fetch("http://127.0.0.1:${port}/away"); out.away = await r.text(); }
+  catch (e) { out.away = e.code ?? e.message; }
+  try { const r = await fetch("http://127.0.0.1:${port}/stay"); out.stay = await r.text(); }
+  catch (e) { out.stay = e.code ?? e.message; }
+  const auth = { headers: { authorization: "Bearer t" } };
+  try { const r = await fetch("http://127.0.0.1:${port}/same-auth", auth); out.sameAuth = await r.text(); }
+  catch (e) { out.sameAuth = e.code ?? e.message; }
+  try { const r = await fetch("http://127.0.0.1:${port}/cross-auth", auth); out.crossAuth = await r.text(); }
+  catch (e) { out.crossAuth = e.code ?? e.message; }
+  anonRpcWorker.signalReady();
+  for (;;) {
+    const call = await anonRpcWorker.acceptCall();
+    call.respond({ status: 200, headers: [], body: new TextEncoder().encode(JSON.stringify(out)) });
+  }
+})();
+`,
+    { capabilities: { fetch: true }, network: allowLoopback },
+  );
+  hop.close();
+  other.close();
+  if (redirected.away !== "permission-denied") {
+    fail(`a redirect to an address the policy refuses was followed: ${JSON.stringify(redirected)}`);
+  }
+  if (redirected.stay !== "FINE") fail(`a redirect within the policy was not followed: ${JSON.stringify(redirected)}`);
+  ok(`a redirect to a refused address is not followed (${redirected.away}); one within the policy is`);
+  if (redirected.sameAuth !== "Bearer t" || redirected.crossAuth !== "none") {
+    fail(`Authorization on redirect: ${JSON.stringify(redirected)}`);
+  }
+  ok("Authorization is kept on a same-origin redirect and dropped on a cross-origin one");
+}
+
 /* --- 7. the bridged socket capability (PROPOSED, not in SPEC.md) ------- */
 
 // A plain TCP peer, not the JSON-RPC server above: the point of this capability
