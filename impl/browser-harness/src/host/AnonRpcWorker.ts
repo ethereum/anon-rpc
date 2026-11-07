@@ -228,7 +228,7 @@ export class AnonRpcWorker {
         // toResponse validates worker-supplied status/headers; a throw must
         // settle the fetch (the record is already removed) rather than escape.
         try {
-          rec.resolve(toResponse(msg.response));
+          rec.resolve(toResponse(msg.response, rec.url));
         } catch (e) {
           rec.reject(e);
         }
@@ -350,7 +350,15 @@ function renderLogArg(a: unknown): unknown {
   return a;
 }
 
-function toResponse(r: AnonFetchResponse): Response {
+function absoluteUrl(raw: string): string {
+  try {
+    return new URL(raw, globalThis.location?.href).href;
+  } catch {
+    return raw;
+  }
+}
+
+export function toResponse(r: AnonFetchResponse, requestUrl?: string): Response {
   const headers = new Headers();
   for (const [k, v] of r.headers) headers.append(k, v);
   const status = r.status;
@@ -358,8 +366,12 @@ function toResponse(r: AnonFetchResponse): Response {
   const body = status === 204 || status === 205 || status === 304 ? null : (r.body as BodyInit);
   const resp = new Response(body, { status, headers });
   // Response.url is read-only and unset by the constructor; surface the
-  // worker-reported post-redirect URL (§9.2) by shadowing the getter.
-  if (r.url) Object.defineProperty(resp, "url", { value: r.url });
+  // worker-reported post-redirect URL (§9.2) by shadowing the getter. A worker
+  // may omit it (it is optional), and a native fetch never answers a request
+  // with an empty url, so fall back to the URL that was requested, resolved
+  // and serialized as fetch would (absolute, with "/" for an empty path).
+  const url = r.url || (requestUrl && absoluteUrl(requestUrl));
+  if (url) Object.defineProperty(resp, "url", { value: url });
   return resp;
 }
 
