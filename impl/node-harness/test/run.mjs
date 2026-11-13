@@ -13,6 +13,8 @@
 // present: the boundary is now the interpreter, so this runs anywhere Node does.
 
 import { spawn } from "node:child_process";
+import dns from "node:dns";
+import { syncBuiltinESMExports } from "node:module";
 import { createServer } from "node:http";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -332,6 +334,119 @@ if (policed.loopback !== "permission-denied") {
 if (policed.rfc1918 !== "permission-denied") fail(`fetch reached RFC1918: ${JSON.stringify(policed)}`);
 if (policed.file !== "permission-denied") fail(`fetch accepted a file:// URL: ${JSON.stringify(policed)}`);
 ok(`granted fetch refused loopback, RFC1918 and file:// by policy (${policed.loopback})`);
+
+// A redirect is a new destination and must pass the same check. A server the
+// policy allows (127.0.0.1) redirecting the guest to an address it does not
+// (127.0.0.2, still loopback) must not be followed; a redirect that stays on an
+// allowed address still is. Authorization survives a same-origin hop and is
+// dropped on a hop to another origin (here, another port), as fetch does.
+{
+  const echoAuth = (req, res) => void res.writeHead(200).end(req.headers.authorization ?? "none");
+  const other = createServer(echoAuth);
+  await new Promise((done) => other.listen(0, "127.0.0.1", done));
+  const otherPort = other.address().port;
+  const hop = createServer((req, res) => {
+    const port = hop.address().port;
+    if (req.url === "/same-auth") return void res.writeHead(302, { location: "/echo-auth" }).end();
+    if (req.url === "/cross-auth") return void res.writeHead(302, { location: `http://127.0.0.1:${otherPort}/echo-auth` }).end();
+    if (req.url === "/echo-auth") return echoAuth(req, res);
+    if (req.url === "/away") return void res.writeHead(302, { location: `http://127.0.0.2:${port}/secret` }).end();
+    if (req.url === "/stay") return void res.writeHead(302, { location: `http://127.0.0.1:${port}/fine` }).end();
+    res.writeHead(200).end(req.url === "/secret" ? "SECRET" : "FINE");
+  });
+  await new Promise((done) => hop.listen(0, "0.0.0.0", done));
+  const port = hop.address().port;
+  const redirected = await interrogate(
+    `
+(async () => {
+  const out = {};
+  try { const r = await fetch("http://127.0.0.1:${port}/away"); out.away = await r.text(); }
+  catch (e) { out.away = e.code ?? e.message; }
+  try { const r = await fetch("http://127.0.0.1:${port}/stay"); out.stay = await r.text(); }
+  catch (e) { out.stay = e.code ?? e.message; }
+  const auth = { headers: { authorization: "Bearer t" } };
+  try { const r = await fetch("http://127.0.0.1:${port}/same-auth", auth); out.sameAuth = await r.text(); }
+  catch (e) { out.sameAuth = e.code ?? e.message; }
+  try { const r = await fetch("http://127.0.0.1:${port}/cross-auth", auth); out.crossAuth = await r.text(); }
+  catch (e) { out.crossAuth = e.code ?? e.message; }
+  anonRpcWorker.signalReady();
+  for (;;) {
+    const call = await anonRpcWorker.acceptCall();
+    call.respond({ status: 200, headers: [], body: new TextEncoder().encode(JSON.stringify(out)) });
+  }
+})();
+`,
+    { capabilities: { fetch: true }, network: allowLoopback },
+  );
+  hop.close();
+  other.close();
+  if (redirected.away !== "permission-denied") {
+    fail(`a redirect to an address the policy refuses was followed: ${JSON.stringify(redirected)}`);
+  }
+  if (redirected.stay !== "FINE") fail(`a redirect within the policy was not followed: ${JSON.stringify(redirected)}`);
+  ok(`a redirect to a refused address is not followed (${redirected.away}); one within the policy is`);
+  if (redirected.sameAuth !== "Bearer t" || redirected.crossAuth !== "none") {
+    fail(`Authorization on redirect: ${JSON.stringify(redirected)}`);
+  }
+  ok("Authorization is kept on a same-origin redirect and dropped on a cross-origin one");
+}
+
+// DNS rebinding: a name whose answer changes between the policy check and the
+// connection. Here the first lookup of rebind.test answers 127.0.0.2 (allowed)
+// and any later one 127.0.0.1 (refused), as a TTL-0 nameserver could. The
+// bridge must connect to the address it checked, so the guest reaches
+// 127.0.0.2 and never 127.0.0.1.
+{
+  const realPromise = dns.promises.lookup;
+  const realCallback = dns.lookup;
+  let answers = 0;
+  const answer = () => (answers++ === 0 ? "127.0.0.2" : "127.0.0.1");
+  dns.promises.lookup = async (host, options) => {
+    if (host !== "rebind.test") return realPromise(host, options);
+    const address = answer();
+    return options?.all ? [{ address, family: 4 }] : { address, family: 4 };
+  };
+  dns.lookup = (host, options, callback) => {
+    if (typeof options === "function") [callback, options] = [options, {}];
+    if (host !== "rebind.test") return realCallback(host, options, callback);
+    const address = answer();
+    return options?.all ? callback(null, [{ address, family: 4 }]) : callback(null, address, 4);
+  };
+  syncBuiltinESMExports();
+
+  const where = createServer((req, res) => void res.writeHead(200).end(`reached ${req.socket.localAddress}`));
+  await new Promise((done) => where.listen(0, "0.0.0.0", done));
+  const port = where.address().port;
+  const rebound = await interrogate(
+    `
+(async () => {
+  const out = {};
+  try { const r = await fetch("http://rebind.test:${port}/"); out.got = await r.text(); }
+  catch (e) { out.got = e.code ?? e.message; }
+  try { const r = await fetch("http://rebind.test:${port}/"); out.again = await r.text(); }
+  catch (e) { out.again = e.code ?? e.message; }
+  anonRpcWorker.signalReady();
+  for (;;) {
+    const call = await anonRpcWorker.acceptCall();
+    call.respond({ status: 200, headers: [], body: new TextEncoder().encode(JSON.stringify(out)) });
+  }
+})();
+`,
+    { capabilities: { fetch: true }, network: { policy: { allow: ["127.0.0.2/32"] } } },
+  );
+  where.close();
+  dns.promises.lookup = realPromise;
+  dns.lookup = realCallback;
+  syncBuiltinESMExports();
+  if (rebound.got !== "reached 127.0.0.2") {
+    fail(`a rebinding name was not pinned to the checked address: ${JSON.stringify(rebound)}`);
+  }
+  ok("a name whose answer changes after the policy check is still connected at the checked address");
+  // The second request's check sees the new answer and refuses it; the
+  // connections kept for 127.0.0.2 are not reused for a different answer.
+  if (rebound.again !== "permission-denied") fail(`a later request reused the old address: ${JSON.stringify(rebound)}`);
+  ok("a later request to the same name is checked again, and refused when the answer changed");
+}
 
 /* --- 7. the bridged socket capability (PROPOSED, not in SPEC.md) ------- */
 

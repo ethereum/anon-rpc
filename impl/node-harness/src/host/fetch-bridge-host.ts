@@ -19,6 +19,7 @@
 // capability's; the note in README says what that would buy.
 
 import { lookup } from "node:dns/promises";
+import { Agent } from "undici";
 import { Policy, type AddressPolicy } from "./address-policy.js";
 import type { Rpc } from "../protocol.js";
 import type { GuestPayload, GuestReply } from "../child/isolate-thread.js";
@@ -39,6 +40,11 @@ export type FetchBridgeOptions = {
 
 const DEFAULT_MAX_CONCURRENT = 16;
 const DEFAULT_MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+// The platform's own limit (Fetch: "redirect count"), kept small here.
+const MAX_REDIRECTS = 5;
+// Connection pools kept at once, one per checked address; the oldest is closed
+// when a new address would exceed this.
+const MAX_POOLS = 32;
 
 function coded(code: string, message: string): Error {
   const e = new Error(message);
@@ -53,6 +59,57 @@ export function installFetchBridge(rpc: Rpc, opts: FetchBridgeOptions = {}): () 
   const maxBytes = opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
   const impl = opts.fetchImpl ?? fetch;
   const inFlight = new Set<AbortController>();
+
+  // Node's fetch would resolve a name again when it connects, and a name whose
+  // answer changes in between (DNS rebinding) would then reach an address that
+  // was never checked. So connections go through an undici Agent whose lookup
+  // returns one checked address and nothing else. Agents are kept per address,
+  // so requests to the same checked address reuse connections; a name that
+  // later resolves elsewhere gets a different Agent. The URL keeps the name, so
+  // Host, TLS SNI and certificate checks are unchanged.
+  const pools = new Map<string, Agent>();
+  function poolFor(dest: { address: string; family: number }): Agent {
+    const key = `${dest.family}/${dest.address}`;
+    let pool = pools.get(key);
+    if (!pool) {
+      pool = new Agent({
+        connect: {
+          lookup: (_host, options, callback) =>
+            options?.all
+              ? callback(null, [{ address: dest.address, family: dest.family }])
+              : callback(null, dest.address, dest.family),
+        },
+      });
+      pools.set(key, pool);
+      if (pools.size > MAX_POOLS) {
+        const [oldestKey, oldest] = pools.entries().next().value!;
+        pools.delete(oldestKey);
+        void oldest.close();
+      }
+    }
+    return pool;
+  }
+
+  // Same discipline as socket.connect: resolve, then decide on the RESOLVED
+  // address, and connect to that address (poolFor, above), never to
+  // a second answer for the same name.
+  async function checkDestination(url: URL): Promise<{ address: string; family: number }> {
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      throw coded("permission-denied", `fetch: ${url.protocol} is not allowed`);
+    }
+    let address: string;
+    let family: number;
+    try {
+      ({ address, family } = await lookup(url.hostname, { verbatim: true }));
+    } catch (e) {
+      throw coded("network-error", `fetch: cannot resolve ${url.hostname}: ${(e as Error).message}`);
+    }
+    const decision = policy.check(address);
+    if (!decision.ok) {
+      throw coded("permission-denied", `fetch: ${url.hostname} → ${decision.why}`);
+    }
+    return { address, family };
+  }
 
   rpc.on("fetch", async (payload: GuestPayload, ctx) => {
     const req = (payload?.args ?? {}) as {
@@ -74,25 +131,7 @@ export function installFetchBridge(rpc: Rpc, opts: FetchBridgeOptions = {}): () 
     } catch {
       throw coded("protocol-error", `fetch: not a valid URL: ${req.url}`);
     }
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      throw coded("permission-denied", `fetch: ${url.protocol} is not allowed`);
-    }
-
-    // Same discipline as socket.connect: resolve, then decide on the RESOLVED
-    // address. Node's fetch resolves again when it dials, so this is a check
-    // rather than a guarantee — a name whose answer changes in between could
-    // still be reached. Closing that needs a custom dispatcher pinned to the
-    // checked address; noted in README rather than pretended away.
-    let address: string;
-    try {
-      ({ address } = await lookup(url.hostname, { verbatim: true }));
-    } catch (e) {
-      throw coded("network-error", `fetch: cannot resolve ${url.hostname}: ${(e as Error).message}`);
-    }
-    const decision = policy.check(address);
-    if (!decision.ok) {
-      throw coded("permission-denied", `fetch: ${url.hostname} → ${decision.why}`);
-    }
+    let dest = await checkDestination(url);
 
     const ac = new AbortController();
     inFlight.add(ac);
@@ -100,20 +139,46 @@ export function installFetchBridge(rpc: Rpc, opts: FetchBridgeOptions = {}): () 
     ctx.signal.addEventListener("abort", () => ac.abort(), { once: true });
 
     try {
-      const headers = Array.isArray(req.headers)
+      let headers = Array.isArray(req.headers)
         ? (req.headers as [string, string][]).filter(
             (h) => Array.isArray(h) && typeof h[0] === "string" && typeof h[1] === "string",
           )
         : [];
-      const response = await impl(url, {
-        method: typeof req.method === "string" ? req.method : "GET",
-        headers,
-        ...(payload?.bytes?.byteLength ? { body: payload.bytes } : {}),
-        ...(req.redirect === "follow" || req.redirect === "error" || req.redirect === "manual"
-          ? { redirect: req.redirect }
-          : {}),
-        signal: ac.signal,
-      });
+      // Redirects are followed here, not by the fetch implementation, so every
+      // hop passes the same address check as the first URL. Following them
+      // blindly would let any reachable server send the guest to the host's own
+      // network (loopback, private ranges, cloud metadata). 303, and 301/302 on
+      // POST, become GET as the platform does; a hop to another origin drops
+      // Authorization, as the platform does.
+      const mode = req.redirect === "error" || req.redirect === "manual" ? req.redirect : "follow";
+      let method = typeof req.method === "string" ? req.method : "GET";
+      let body = payload?.bytes?.byteLength ? payload.bytes : undefined;
+      let response: Response;
+      for (let hops = 0; ; hops++) {
+        response = await impl(url, {
+          method,
+          headers,
+          ...(body ? { body } : {}),
+          redirect: "manual",
+          signal: ac.signal,
+          dispatcher: poolFor(dest),
+          // Node's fetch takes an undici dispatcher; its RequestInit type names
+          // one from an older undici-types, which this Agent does not match.
+        } as unknown as RequestInit);
+        const location = response.headers.get("location");
+        if (response.status < 300 || response.status > 399 || !location || mode === "manual") break;
+        if (mode === "error") throw coded("network-error", 'fetch: redirected, and redirect is "error"');
+        if (hops >= MAX_REDIRECTS) throw coded("network-error", `fetch: more than ${MAX_REDIRECTS} redirects`);
+        const next = new URL(location, url);
+        await response.body?.cancel();
+        dest = await checkDestination(next);
+        if (next.origin !== url.origin) headers = headers.filter(([k]) => k.toLowerCase() !== "authorization");
+        url = next;
+        if (response.status === 303 || ((response.status === 301 || response.status === 302) && method === "POST")) {
+          method = "GET";
+          body = undefined;
+        }
+      }
 
       const buf = await response.arrayBuffer();
       if (buf.byteLength > maxBytes) {
@@ -143,5 +208,7 @@ export function installFetchBridge(rpc: Rpc, opts: FetchBridgeOptions = {}): () 
   return () => {
     for (const ac of inFlight) ac.abort();
     inFlight.clear();
+    for (const pool of pools.values()) void pool.close();
+    pools.clear();
   };
 }
