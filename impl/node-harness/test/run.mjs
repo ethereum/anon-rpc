@@ -13,6 +13,8 @@
 // present: the boundary is now the interpreter, so this runs anywhere Node does.
 
 import { spawn } from "node:child_process";
+import dns from "node:dns";
+import { syncBuiltinESMExports } from "node:module";
 import { createServer } from "node:http";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -387,6 +389,63 @@ ok(`granted fetch refused loopback, RFC1918 and file:// by policy (${policed.loo
     fail(`Authorization on redirect: ${JSON.stringify(redirected)}`);
   }
   ok("Authorization is kept on a same-origin redirect and dropped on a cross-origin one");
+}
+
+// DNS rebinding: a name whose answer changes between the policy check and the
+// connection. Here the first lookup of rebind.test answers 127.0.0.2 (allowed)
+// and any later one 127.0.0.1 (refused), as a TTL-0 nameserver could. The
+// bridge must connect to the address it checked, so the guest reaches
+// 127.0.0.2 and never 127.0.0.1.
+{
+  const realPromise = dns.promises.lookup;
+  const realCallback = dns.lookup;
+  let answers = 0;
+  const answer = () => (answers++ === 0 ? "127.0.0.2" : "127.0.0.1");
+  dns.promises.lookup = async (host, options) => {
+    if (host !== "rebind.test") return realPromise(host, options);
+    const address = answer();
+    return options?.all ? [{ address, family: 4 }] : { address, family: 4 };
+  };
+  dns.lookup = (host, options, callback) => {
+    if (typeof options === "function") [callback, options] = [options, {}];
+    if (host !== "rebind.test") return realCallback(host, options, callback);
+    const address = answer();
+    return options?.all ? callback(null, [{ address, family: 4 }]) : callback(null, address, 4);
+  };
+  syncBuiltinESMExports();
+
+  const where = createServer((req, res) => void res.writeHead(200).end(`reached ${req.socket.localAddress}`));
+  await new Promise((done) => where.listen(0, "0.0.0.0", done));
+  const port = where.address().port;
+  const rebound = await interrogate(
+    `
+(async () => {
+  const out = {};
+  try { const r = await fetch("http://rebind.test:${port}/"); out.got = await r.text(); }
+  catch (e) { out.got = e.code ?? e.message; }
+  try { const r = await fetch("http://rebind.test:${port}/"); out.again = await r.text(); }
+  catch (e) { out.again = e.code ?? e.message; }
+  anonRpcWorker.signalReady();
+  for (;;) {
+    const call = await anonRpcWorker.acceptCall();
+    call.respond({ status: 200, headers: [], body: new TextEncoder().encode(JSON.stringify(out)) });
+  }
+})();
+`,
+    { capabilities: { fetch: true }, network: { policy: { allow: ["127.0.0.2/32"] } } },
+  );
+  where.close();
+  dns.promises.lookup = realPromise;
+  dns.lookup = realCallback;
+  syncBuiltinESMExports();
+  if (rebound.got !== "reached 127.0.0.2") {
+    fail(`a rebinding name was not pinned to the checked address: ${JSON.stringify(rebound)}`);
+  }
+  ok("a name whose answer changes after the policy check is still connected at the checked address");
+  // The second request's check sees the new answer and refuses it; the
+  // connections kept for 127.0.0.2 are not reused for a different answer.
+  if (rebound.again !== "permission-denied") fail(`a later request reused the old address: ${JSON.stringify(rebound)}`);
+  ok("a later request to the same name is checked again, and refused when the answer changed");
 }
 
 /* --- 7. the bridged socket capability (PROPOSED, not in SPEC.md) ------- */
