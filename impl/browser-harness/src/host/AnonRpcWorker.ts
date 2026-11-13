@@ -12,9 +12,11 @@ import { openStorageBackend, type StorageBackend } from "./idb-storage.js";
 import {
   CallQueue,
   LogQueue,
+  copyConnectSrc,
   copyPlainValue,
   fetchAndVerifyBundle,
   readSpecifier,
+  workerCsp,
   MAX_BUNDLE_BYTES,
 } from "@anon-rpc/harness-core";
 import { kpsResolverKind } from "./kps-http.js";
@@ -51,6 +53,9 @@ export class AnonRpcWorker {
 
   #init: WorkerInit;
   #config: PlainValue;
+  // The CSP the iframe applies before it spawns the worker; undefined when the
+  // host did not set connectSrc, which leaves egress as the platform has it.
+  #csp?: string;
   #rpc?: PortRpc;
   #iframe?: HTMLIFrameElement;
   #disposeKps?: () => void;
@@ -80,6 +85,8 @@ export class AnonRpcWorker {
     // §7.1: a config that is not a §9.4 plain value fails construction, before
     // anything boots. Copied now, so later host mutation cannot reach the worker.
     this.#config = copyPlainValue(init.config, "config");
+    const connectSrc = copyConnectSrc(init.connectSrc);
+    if (connectSrc) this.#csp = workerCsp(connectSrc);
     this.ready = new Promise<void>((res, rej) => {
       this.#readyResolve = res;
       this.#readyReject = rej;
@@ -155,7 +162,7 @@ export class AnonRpcWorker {
     // §7.1: config rides the init message. It is already a §9.4 copy, and
     // structured clone carries every plain value unchanged.
     iframe.contentWindow!.postMessage(
-      { kind: "init", runtimeSource: __WORKER_RUNTIME_SRC__, bundleBytes, config: this.#config },
+      { kind: "init", runtimeSource: __WORKER_RUNTIME_SRC__, bundleBytes, config: this.#config, csp: this.#csp },
       "*",
       [channel.port2],
     );

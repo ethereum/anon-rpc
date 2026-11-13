@@ -15,6 +15,7 @@ async function go(): Promise<void> {
     const address = q.get("address") ?? undefined;
     const iframeUrl = q.get("iframeUrl") ?? undefined;
     const isolationKey = q.get("isolationKey") ?? undefined;
+    const connectSrc = q.has("connectSrc") ? (JSON.parse(q.get("connectSrc")!) as string[]) : undefined;
     // ?logs=1 reads what the worker logged instead of making a call, so the
     // e2e can inspect the §13 path through the same page.
     // ?stream=1 runs the streaming round trip instead (e2e).
@@ -33,6 +34,7 @@ async function go(): Promise<void> {
       address,
       iframeUrl,
       isolationKey,
+      connectSrc,
       body: { jsonrpc: "2.0", id: 1, method: "eth_blockNumber", params: [] },
     });
     out.textContent = JSON.stringify(res);

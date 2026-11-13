@@ -22,7 +22,7 @@ import { assertAssetPresent } from "../background/assets.js";
 import { DEFAULT_IFRAME_URL, type ExtensionWorkerInit } from "../background/OffscreenWorker.js";
 import { chromeApi } from "../chrome-types.js";
 import { resolveIframeUrl } from "../iframe-url.js";
-import { copyForwardedEntries, copyPlainValue } from "@anon-rpc/harness-core";
+import { copyConnectSrc, copyForwardedEntries, copyPlainValue } from "@anon-rpc/harness-core";
 
 export class PageWorker {
   readonly ready: Promise<void>;
@@ -40,6 +40,7 @@ export class PageWorker {
     // too, but only once the asset check below lets it be constructed, which
     // would turn the constructor's TypeError into a rejected `ready`.
     const config = copyPlainValue(init.config, "config");
+    const connectSrc = copyConnectSrc(init.connectSrc);
     // An absolute URL passes through untouched, so a cross-origin one reaches
     // the browser harness's §6 same-origin check instead of being rewritten
     // into a same-origin-looking extension URL (see resolveIframeUrl).
@@ -52,7 +53,7 @@ export class PageWorker {
       // anything else is §6's to reject, with §6's message.
       if (isOwnPage) await assertAssetPresent(iframeUrl, "sandboxed page");
       const { address, preExisting } = init;
-      return new BrowserHarnessWorker({ address, config, preExisting, iframeUrl });
+      return new BrowserHarnessWorker({ address, config, preExisting, iframeUrl, connectSrc });
     })();
 
     this.ready = this.#inner.then((worker) => worker.ready);

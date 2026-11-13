@@ -148,8 +148,9 @@ function serve(port: RuntimePort, cache: Map<string, Entry>, idleMs: number): vo
         // the key for the same reason — it is part of how the worker was
         // constructed, and leaving it out meant a caller asking for a
         // different isolation document silently got a worker built with the
-        // previous one.
-        const cacheKey = `${msg.address.toLowerCase()}::${msg.iframeUrl}::${plainKey(msg.config)}`;
+        // previous one. connectSrc too: a worker booted with other egress (or
+        // none) must not answer a caller that confined it.
+        const cacheKey = `${msg.address.toLowerCase()}::${msg.iframeUrl}::${JSON.stringify(msg.connectSrc ?? null)}::${plainKey(msg.config)}`;
         key = cacheKey;
         const hit = msg.reuse ? cache.get(cacheKey) : undefined;
         if (hit) {
@@ -164,6 +165,7 @@ function serve(port: RuntimePort, cache: Map<string, Entry>, idleMs: number): vo
             config: decodePlain(msg.config),
             preExisting: { rpcProvider: provider },
             iframeUrl: msg.iframeUrl,
+            connectSrc: msg.connectSrc,
           });
           entry = { worker, refs: 1, ready: worker.ready };
           cache.set(cacheKey, entry);

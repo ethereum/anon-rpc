@@ -22,6 +22,12 @@ export type WorkerInit = {
   // embedder whose CSP will not let the harness construct one inline (§6).
   // A harness that does not use an iframe MUST ignore it.
   iframeUrl?: string;
+  // Where a browser harness's worker may connect, as CSP source expressions
+  // (e.g. "https://rpc.example", "wss:"). When set, the worker reaches only
+  // these over fetch, XHR and WebSocket, and importScripts reaches nothing; an
+  // empty list allows no direct connection at all. Unset, egress is not
+  // confined. A harness that does not use an iframe ignores it.
+  connectSrc?: string[];
   preExisting?: {
     rpcProvider?: RpcProvider;
   };

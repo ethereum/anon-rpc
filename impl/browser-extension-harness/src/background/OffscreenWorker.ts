@@ -33,7 +33,7 @@ import {
 } from "../wire.js";
 import { ASSET_PATH, assertAssetPresent } from "./assets.js";
 import { resolveIframeUrl } from "../iframe-url.js";
-import { LogQueue, copyForwardedEntries } from "@anon-rpc/harness-core";
+import { LogQueue, copyConnectSrc, copyForwardedEntries } from "@anon-rpc/harness-core";
 import { BodyStreams } from "../body-stream.js";
 
 /** §13.1 retention bound; see the browser harness for the sizing note. */
@@ -114,6 +114,9 @@ export class OffscreenWorker {
     // §7.1: a config that is not a §9.4 plain value fails construction. Encoded
     // now, so later host mutation cannot reach the worker.
     const config = encodePlain(init.config, "config");
+    // Checked here, so a bad entry throws from the constructor in this mode too
+    // rather than failing the boot in the offscreen document.
+    const connectSrc = copyConnectSrc(init.connectSrc);
     this.ready = new Promise<void>((res, rej) => {
       this.#readyResolve = res;
       this.#readyReject = rej;
@@ -123,10 +126,10 @@ export class OffscreenWorker {
     this.ready.catch(() => {});
     // §5: `fetch` MUST be this-bound so it works as a free function.
     this.fetch = this.#fetch.bind(this);
-    this.#boot(init, config).catch((e) => this.#fail(e));
+    this.#boot(init, config, connectSrc).catch((e) => this.#fail(e));
   }
 
-  async #boot(init: ExtensionWorkerInit, config: WirePlain): Promise<void> {
+  async #boot(init: ExtensionWorkerInit, config: WirePlain, connectSrc?: string[]): Promise<void> {
     const provider = init.preExisting?.rpcProvider;
     if (!provider) throw new Error("preExisting.rpcProvider is required to read the specifier (§4)");
     this.#provider = provider;
@@ -167,6 +170,7 @@ export class OffscreenWorker {
       address: init.address,
       config,
       iframeUrl,
+      connectSrc,
       reuse: init.reuse ?? true,
     });
     for (const queued of this.#outbox.splice(0)) this.#send(queued);
