@@ -241,6 +241,14 @@ const hostile = await interrogate(
   // The raw bridge the platform is built on was deleted from the global.
   out.bridge = ["__host_send","__host_request","__host_random","__host_url"]
     .map((n) => typeof globalThis[n]).join(",");
+  // Entropy: a full 65,536-byte draw is random to its end; a larger one throws,
+  // as Web Crypto does, rather than coming back partly zero.
+  out.randFull = crypto.getRandomValues(new Uint8Array(65536)).subarray(-4096).some((b) => b !== 0);
+  try { const big = crypto.getRandomValues(new Uint8Array(131072)); out.randOver = big.subarray(65536).some((b) => b !== 0) ? "random" : "ZERO SECOND HALF"; }
+  catch (e) { out.randOver = e.name; }
+  // Only integer typed arrays are filled, as in Web Crypto.
+  out.randTypes = [new Float32Array(4), new Float64Array(4), new DataView(new ArrayBuffer(8)), new Int32Array(4), new BigUint64Array(2)]
+    .map((v) => { try { crypto.getRandomValues(v); return "ok"; } catch (e) { return e.name; } }).join(",");
   anonRpcWorker.signalReady();
   for (;;) {
     const call = await anonRpcWorker.acceptCall();
@@ -257,6 +265,11 @@ if (hostile.viaCapability !== "undefined" || hostile.viaConsole !== "undefined")
   fail(`the realm escape WORKED: ${JSON.stringify(hostile)}`);
 }
 if (!hostile.ctorIsOurs) fail(`a host function's constructor is foreign: ${JSON.stringify(hostile)}`);
+if (!hostile.randFull) fail(`the tail of a 65,536-byte random draw is zero: ${JSON.stringify(hostile)}`);
+if (hostile.randOver !== "QuotaExceededError") fail(`getRandomValues of 131,072 bytes did not throw QuotaExceededError: ${hostile.randOver}`);
+if (hostile.randTypes !== "TypeMismatchError,TypeMismatchError,TypeMismatchError,ok,ok") {
+  fail(`getRandomValues view types: ${hostile.randTypes}`);
+}
 if (hostile.import === "GOT node:fs") fail(`the guest imported node:fs: ${JSON.stringify(hostile)}`);
 if (hostile.bridge !== "undefined,undefined,undefined,undefined") {
   fail(`the raw host bridge is reachable: ${hostile.bridge}`);

@@ -718,10 +718,33 @@
   // Entropy is authority-free but cannot be manufactured inside the isolate,
   // so it is bridged — synchronously, because getRandomValues is synchronous
   // and an anonymizing client needs it for nonces and key material.
+  // Web Crypto fills integer typed arrays only; floats and DataView are refused.
+  const RANDOM_VIEWS = new Set([
+    "Int8Array", "Uint8Array", "Uint8ClampedArray", "Int16Array", "Uint16Array",
+    "Int32Array", "Uint32Array", "BigInt64Array", "BigUint64Array",
+  ]);
+  function namedError(name, message) {
+    const e = new Error(message);
+    e.name = name;
+    return e;
+  }
   const cryptoObj = {
     getRandomValues(view) {
       if (!ArrayBuffer.isView(view)) throw new TypeError("getRandomValues: not a TypedArray");
+      if (!RANDOM_VIEWS.has(Object.prototype.toString.call(view).slice(8, -1))) {
+        throw namedError("TypeMismatchError", "getRandomValues: not an integer TypedArray");
+      }
+      // The host draws at most 65,536 bytes at a time, which is also Web Crypto's
+      // quota. A larger view must throw, as it does there, never come back with
+      // only its first 65,536 bytes random and the rest left as they were.
+      if (view.byteLength > 65536) {
+        throw namedError("QuotaExceededError", "getRandomValues: more than 65536 bytes requested");
+      }
       const bytes = new Uint8Array(hostRandom(view.byteLength));
+      // Never a partial fill, whatever the host returns.
+      if (bytes.byteLength !== view.byteLength) {
+        throw new Error(`getRandomValues: host returned ${bytes.byteLength} of ${view.byteLength} bytes`);
+      }
       new Uint8Array(view.buffer, view.byteOffset, view.byteLength).set(bytes);
       return view;
     },
