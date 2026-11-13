@@ -127,8 +127,12 @@ export class OffscreenWorker {
   }
 
   async #boot(init: ExtensionWorkerInit, config: WirePlain): Promise<void> {
+    // With resolvers (and expectedHash) the specifier is not read, so no
+    // provider is needed; the browser harness validates the pair.
     const provider = init.preExisting?.rpcProvider;
-    if (!provider) throw new Error("preExisting.rpcProvider is required to read the specifier (§4)");
+    if (!provider && init.resolvers === undefined) {
+      throw new Error("preExisting.rpcProvider is required to read the specifier (§4)");
+    }
     this.#provider = provider;
 
     const chrome = chromeApi();
@@ -167,6 +171,8 @@ export class OffscreenWorker {
       address: init.address,
       config,
       iframeUrl,
+      expectedHash: init.expectedHash,
+      resolvers: init.resolvers,
       reuse: init.reuse ?? true,
     });
     for (const queued of this.#outbox.splice(0)) this.#send(queued);

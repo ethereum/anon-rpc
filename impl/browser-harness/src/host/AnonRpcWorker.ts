@@ -15,6 +15,7 @@ import {
   copyPlainValue,
   fetchAndVerifyBundle,
   readSpecifier,
+  pinnedSpecifier,
   MAX_BUNDLE_BYTES,
 } from "@anon-rpc/harness-core";
 import { kpsResolverKind } from "./kps-http.js";
@@ -112,10 +113,12 @@ export class AnonRpcWorker {
   }
 
   async #boot(): Promise<void> {
-    const provider = this.#init.preExisting?.rpcProvider;
-    if (!provider) throw new Error("preExisting.rpcProvider is required to read the specifier");
-
-    const spec = await readSpecifier(provider, this.#init.address);
+    let spec = pinnedSpecifier(this.#init.expectedHash, this.#init.resolvers);
+    if (!spec) {
+      const provider = this.#init.preExisting?.rpcProvider;
+      if (!provider) throw new Error("preExisting.rpcProvider is required to read the specifier");
+      spec = await readSpecifier(provider, this.#init.address, this.#init.expectedHash);
+    }
     const bundleBytes = await fetchAndVerifyBundle(spec, MAX_BUNDLE_BYTES, [kpsResolverKind]);
 
     const channel = new MessageChannel();

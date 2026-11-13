@@ -4,6 +4,7 @@ export { CallQueue } from "./call-queue.js";
 export { LogQueue } from "./log-queue.js";
 export {
   readSpecifier,
+  pinnedSpecifier,
   fetchAndVerifyBundle,
   toHex,
   MAX_BUNDLE_BYTES,

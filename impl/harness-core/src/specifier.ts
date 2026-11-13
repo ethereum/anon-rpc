@@ -37,16 +37,53 @@ function hexToBytes(hex: string): Uint8Array {
 
 export type Specifier = { workerHash: string; resolvers: string[] };
 
+/**
+ * Reads the specifier. With `expectedHash` (`WorkerInit.expectedHash`), a
+ * `workerHash()` that differs rejects here, before the resolvers are read or
+ * any bundle is fetched: the read is one answer from the bootstrap provider,
+ * and the pin is what lets the host, not that provider, decide the code.
+ */
 export async function readSpecifier(
   provider: RpcProvider,
   address: string,
+  expectedHash?: string,
 ): Promise<Specifier> {
+  if (expectedHash !== undefined) checkExpectedHash(expectedHash);
   const hashRet = await ethCall(provider, address, SEL_WORKER_HASH);
+  const workerHash = "0x" + decodeBytes32(hashRet);
+  if (expectedHash !== undefined && workerHash !== expectedHash.toLowerCase()) {
+    throw new Error(`specifier workerHash ${workerHash} is not the expected ${expectedHash.toLowerCase()}`);
+  }
   const resolversRet = await ethCall(provider, address, SEL_WORKER_RESOLVERS);
   return {
-    workerHash: "0x" + decodeBytes32(hashRet),
+    workerHash,
     resolvers: decodeStringArray(resolversRet),
   };
+}
+
+/**
+ * The specifier the host pinned itself, from `WorkerInit.expectedHash` and
+ * `WorkerInit.resolvers`; undefined when no resolvers are given, and the
+ * specifier is read as usual. With both, the boot makes no eth_call: no
+ * bootstrap provider is needed, and none learns that a worker is starting.
+ * The bytes are still accepted only if they match `expectedHash`.
+ */
+export function pinnedSpecifier(expectedHash?: string, resolvers?: readonly string[]): Specifier | undefined {
+  if (resolvers === undefined) return undefined;
+  if (expectedHash === undefined) {
+    throw new TypeError("resolvers needs expectedHash, which is what the fetched bytes are checked against");
+  }
+  checkExpectedHash(expectedHash);
+  if (!Array.isArray(resolvers) || resolvers.length === 0 || !resolvers.every((r) => typeof r === "string")) {
+    throw new TypeError("resolvers must be a non-empty array of strings");
+  }
+  return { workerHash: expectedHash.toLowerCase(), resolvers: [...resolvers] };
+}
+
+function checkExpectedHash(expectedHash: string): void {
+  if (!/^0x[0-9a-fA-F]{64}$/.test(expectedHash)) {
+    throw new TypeError("expectedHash must be a 0x-prefixed 32-byte hex string");
+  }
 }
 
 async function ethCall(provider: RpcProvider, to: string, data: string): Promise<Uint8Array> {

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { keccak_256 } from "@noble/hashes/sha3";
-import { readSpecifier, fetchAndVerifyBundle, toHex, MAX_BUNDLE_BYTES } from "../src/specifier.js";
+import { readSpecifier, pinnedSpecifier, fetchAndVerifyBundle, toHex, MAX_BUNDLE_BYTES } from "../src/specifier.js";
 
 /* ABI encoders mirroring the decoders under test (same as test/run-e2e.mjs). */
 const enc = new TextEncoder();
@@ -64,6 +64,63 @@ test("readSpecifier decodes workerHash and workerResolvers", async () => {
   const spec = await readSpecifier(provider, "0x" + "01".repeat(20));
   assert.equal(spec.workerHash, hash);
   assert.deepEqual(spec.resolvers, resolvers);
+});
+
+test("readSpecifier with expectedHash accepts a matching hash, in any case", async () => {
+  const hash = "0x" + "ab".repeat(32);
+  const provider = mockProvider({
+    [selector("workerHash()")]: hash,
+    [selector("workerResolvers()")]: "0x" + toHex(encodeStringArray(["https://a.test/w.js"])),
+  });
+  const spec = await readSpecifier(provider, "0x" + "01".repeat(20), "0x" + "AB".repeat(32));
+  assert.equal(spec.workerHash, hash);
+});
+
+test("readSpecifier with expectedHash rejects a different hash before reading resolvers", async () => {
+  const calls: string[] = [];
+  const provider = {
+    request: async ({ params }: { method: string; params?: unknown[] }) => {
+      const data = (params as [{ data: string }])[0].data;
+      calls.push(data.slice(0, 10));
+      if (data.startsWith(selector("workerHash()"))) return "0x" + "aa".repeat(32);
+      return "0x" + toHex(encodeStringArray(["https://evil.test/w.js"]));
+    },
+  };
+  await assert.rejects(
+    readSpecifier(provider, "0x" + "01".repeat(20), "0x" + "bb".repeat(32)),
+    /is not the expected 0x(bb){32}/,
+  );
+  assert.deepEqual(calls, [selector("workerHash()")]);
+});
+
+test("readSpecifier rejects a malformed expectedHash with TypeError", async () => {
+  const provider = mockProvider({});
+  for (const bad of ["", "0x1234", "ab".repeat(32), "0x" + "zz".repeat(32)]) {
+    await assert.rejects(readSpecifier(provider, "0x" + "01".repeat(20), bad), TypeError);
+  }
+});
+
+test("pinnedSpecifier is undefined without resolvers, so the specifier is read", () => {
+  assert.equal(pinnedSpecifier(undefined, undefined), undefined);
+  assert.equal(pinnedSpecifier("0x" + "ab".repeat(32), undefined), undefined);
+});
+
+test("pinnedSpecifier builds the specifier from expectedHash and resolvers, copying the list", () => {
+  const resolvers = ["https://a.test/w.js", "https://b.test/w.js"];
+  const spec = pinnedSpecifier("0x" + "AB".repeat(32), resolvers);
+  assert.deepEqual(spec, { workerHash: "0x" + "ab".repeat(32), resolvers });
+  resolvers.push("https://evil.test/w.js");
+  assert.equal(spec!.resolvers.length, 2);
+});
+
+test("pinnedSpecifier rejects resolvers without a valid expectedHash, and bad lists, with TypeError", () => {
+  const ok = ["https://a.test/w.js"];
+  assert.throws(() => pinnedSpecifier(undefined, ok), /needs expectedHash/);
+  assert.throws(() => pinnedSpecifier("0x1234", ok), TypeError);
+  const hash = "0x" + "ab".repeat(32);
+  for (const bad of [[], [1], "https://a.test/w.js"]) {
+    assert.throws(() => pinnedSpecifier(hash, bad as unknown as string[]), /non-empty array of strings/);
+  }
 });
 
 test("readSpecifier rejects malicious ABI data instead of hanging/OOM", async () => {

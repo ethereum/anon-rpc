@@ -204,6 +204,74 @@ ok(`fetch after close() rejects (${closedErr.message})`);
   ok("bundle rejected when keccak256 does not match workerHash (§4)");
 }
 
+/* --- 3b. expectedHash: the host's pin, not the provider, picks the code --- */
+
+{
+  // A provider that names other, self-consistent bytes: the hash check alone accepts
+  // them, because they match the hash it reported.
+  const other = await publish(bundle + "\n// other bytes\n");
+  const servedBefore = served;
+  const pinned = new AnonRpcWorker({
+    address: SPECIFIER,
+    network: allowLoopback,
+    expectedHash: real.hash,
+    preExisting: { rpcProvider: other.provider },
+  });
+  let pinErr;
+  await pinned.ready.catch((e) => (pinErr = e));
+  pinned.close();
+  if (!pinErr) fail("a specifier hash other than expectedHash was accepted");
+  if (!/is not the expected/.test(pinErr.message)) fail(`expected an expectedHash error, got: ${pinErr.message}`);
+  if (served !== servedBefore) fail("a bundle was fetched although the hash differed from expectedHash");
+  ok("boot refused, before any bundle fetch, when workerHash differs from expectedHash");
+
+  const matching = new AnonRpcWorker({
+    address: SPECIFIER,
+    network: allowLoopback,
+    expectedHash: real.hash.toUpperCase().replace("0X", "0x"),
+    preExisting: { rpcProvider: real.provider },
+  });
+  await matching.ready;
+  matching.close();
+  ok("boot proceeds when workerHash equals expectedHash (case-insensitive)");
+
+  // expectedHash + resolvers: the host knows the answer, so nothing is read
+  // and no bootstrap provider is needed.
+  const readsBefore = specifierReads;
+  const fetchesBefore = served;
+  const noRead = new AnonRpcWorker({
+    address: SPECIFIER,
+    network: allowLoopback,
+    expectedHash: real.hash,
+    resolvers: [real.url],
+  });
+  await noRead.ready;
+  noRead.close();
+  if (specifierReads !== readsBefore) fail(`expected no specifier read, got ${specifierReads - readsBefore}`);
+  if (served !== fetchesBefore + 1) fail(`expected one bundle fetch, got ${served - fetchesBefore}`);
+  ok("expectedHash + resolvers boot with no specifier read and no provider");
+
+  // The pin still holds: bytes from a host-given resolver must match it.
+  let mismatch;
+  const wrongBytes = new AnonRpcWorker({
+    address: SPECIFIER,
+    network: allowLoopback,
+    expectedHash: real.hash,
+    resolvers: [other.url],
+  });
+  await wrongBytes.ready.catch((e) => (mismatch = e));
+  wrongBytes.close();
+  if (!mismatch || !/hash mismatch/.test(mismatch.message)) fail(`expected a hash mismatch, got: ${mismatch?.message}`);
+  ok("bytes from a host-given resolver are still checked against expectedHash");
+
+  let noHash;
+  const unpinned = new AnonRpcWorker({ address: SPECIFIER, network: allowLoopback, resolvers: [real.url] });
+  await unpinned.ready.catch((e) => (noHash = e));
+  unpinned.close();
+  if (!(noHash instanceof TypeError)) fail(`resolvers without expectedHash should fail with TypeError, got: ${noHash}`);
+  ok("resolvers without expectedHash fail the boot");
+}
+
 /** Run a worker whose only job is to report a JSON object, and return it. */
 async function interrogate(source, init = {}) {
   const pub = await publish(source);

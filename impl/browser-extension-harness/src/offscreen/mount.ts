@@ -148,8 +148,9 @@ function serve(port: RuntimePort, cache: Map<string, Entry>, idleMs: number): vo
         // the key for the same reason — it is part of how the worker was
         // constructed, and leaving it out meant a caller asking for a
         // different isolation document silently got a worker built with the
-        // previous one.
-        const cacheKey = `${msg.address.toLowerCase()}::${msg.iframeUrl}::${plainKey(msg.config)}`;
+        // previous one. expectedHash too: a worker booted without a pin, or
+        // with another one, must not answer a caller that pinned this hash.
+        const cacheKey = `${msg.address.toLowerCase()}::${msg.iframeUrl}::${msg.expectedHash?.toLowerCase() ?? ""}::${plainKey(msg.config)}`;
         key = cacheKey;
         const hit = msg.reuse ? cache.get(cacheKey) : undefined;
         if (hit) {
@@ -164,6 +165,8 @@ function serve(port: RuntimePort, cache: Map<string, Entry>, idleMs: number): vo
             config: decodePlain(msg.config),
             preExisting: { rpcProvider: provider },
             iframeUrl: msg.iframeUrl,
+            expectedHash: msg.expectedHash,
+            resolvers: msg.resolvers,
           });
           entry = { worker, refs: 1, ready: worker.ready };
           cache.set(cacheKey, entry);

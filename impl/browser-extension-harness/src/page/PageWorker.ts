@@ -51,8 +51,8 @@ export class PageWorker {
       // `ready` that never settles (assets.ts). Only our own pages are checked;
       // anything else is §6's to reject, with §6's message.
       if (isOwnPage) await assertAssetPresent(iframeUrl, "sandboxed page");
-      const { address, preExisting } = init;
-      return new BrowserHarnessWorker({ address, config, preExisting, iframeUrl });
+      const { address, preExisting, expectedHash, resolvers } = init;
+      return new BrowserHarnessWorker({ address, config, preExisting, iframeUrl, expectedHash, resolvers });
     })();
 
     this.ready = this.#inner.then((worker) => worker.ready);
