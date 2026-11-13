@@ -167,6 +167,7 @@ export class OffscreenWorker {
       address: init.address,
       config,
       iframeUrl,
+      expectedHash: init.expectedHash,
       reuse: init.reuse ?? true,
     });
     for (const queued of this.#outbox.splice(0)) this.#send(queued);

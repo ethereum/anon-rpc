@@ -37,14 +37,28 @@ function hexToBytes(hex: string): Uint8Array {
 
 export type Specifier = { workerHash: string; resolvers: string[] };
 
+/**
+ * Reads the specifier. With `expectedHash` (`WorkerInit.expectedHash`), a
+ * `workerHash()` that differs rejects here, before the resolvers are read or
+ * any bundle is fetched: the read is one answer from the bootstrap provider,
+ * and the pin is what lets the host, not that provider, decide the code.
+ */
 export async function readSpecifier(
   provider: RpcProvider,
   address: string,
+  expectedHash?: string,
 ): Promise<Specifier> {
+  if (expectedHash !== undefined && !/^0x[0-9a-fA-F]{64}$/.test(expectedHash)) {
+    throw new TypeError("expectedHash must be a 0x-prefixed 32-byte hex string");
+  }
   const hashRet = await ethCall(provider, address, SEL_WORKER_HASH);
+  const workerHash = "0x" + decodeBytes32(hashRet);
+  if (expectedHash !== undefined && workerHash !== expectedHash.toLowerCase()) {
+    throw new Error(`specifier workerHash ${workerHash} is not the expected ${expectedHash.toLowerCase()}`);
+  }
   const resolversRet = await ethCall(provider, address, SEL_WORKER_RESOLVERS);
   return {
-    workerHash: "0x" + decodeBytes32(hashRet),
+    workerHash,
     resolvers: decodeStringArray(resolversRet),
   };
 }

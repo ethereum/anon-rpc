@@ -115,7 +115,7 @@ export class AnonRpcWorker {
     const provider = this.#init.preExisting?.rpcProvider;
     if (!provider) throw new Error("preExisting.rpcProvider is required to read the specifier");
 
-    const spec = await readSpecifier(provider, this.#init.address);
+    const spec = await readSpecifier(provider, this.#init.address, this.#init.expectedHash);
     const bundleBytes = await fetchAndVerifyBundle(spec, MAX_BUNDLE_BYTES, [kpsResolverKind]);
 
     const channel = new MessageChannel();

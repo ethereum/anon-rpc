@@ -160,7 +160,7 @@ export class AnonRpcWorker {
     // §4: read the pinned hash, fetch bytes from a resolver, accept only bytes
     // whose keccak256 matches. This happens on the HOST, before the isolate
     // exists — the bytes are verified before anything is asked to run them.
-    const spec = await readSpecifier(provider, init.address);
+    const spec = await readSpecifier(provider, init.address, init.expectedHash);
     const bundle = await fetchAndVerifyBundle(spec);
 
     const capabilities = {

@@ -22,6 +22,11 @@ export type WorkerInit = {
   // embedder whose CSP will not let the harness construct one inline (§6).
   // A harness that does not use an iframe MUST ignore it.
   iframeUrl?: string;
+  // The worker hash the host expects: a 0x-prefixed 32-byte hex
+  // string. When set, a specifier whose workerHash() differs fails the boot
+  // before any bundle is fetched, so the bootstrap provider's answer alone
+  // cannot choose the code that runs.
+  expectedHash?: string;
   preExisting?: {
     rpcProvider?: RpcProvider;
   };

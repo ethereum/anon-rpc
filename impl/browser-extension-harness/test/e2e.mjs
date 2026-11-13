@@ -426,6 +426,35 @@ if (bootstrapCalls !== 2 || bundleFetches !== 1) {
 if (workerRpcCalls !== 2) await fail(`expected 2 worker RPC calls, got ${workerRpcCalls}`);
 ok("a second call reused the booted worker — no re-read, no re-fetch, no re-verify");
 
+/* --- expectedHash, across the offscreen hop ------------------------------ */
+
+// The offscreen document holds a worker booted for this address without a
+// pin. A caller pinning a different hash must not be handed that worker: it
+// gets a fresh specifier read, refused before any bundle fetch.
+{
+  const pinPage = await context.newPage();
+  const run = async (hash) => {
+    await pinPage.goto(`chrome-extension://${extensionId}/page.html?expectedHash=${hash}`);
+    await pinPage.waitForFunction(() => document.getElementById("out")?.textContent !== "pending", {
+      timeout: 30_000,
+    });
+    return JSON.parse((await pinPage.textContent("#out")) ?? "{}");
+  };
+  const readsBefore = bootstrapCalls;
+  const fetchesBefore = bundleFetches;
+  const wrong = await run("0x" + "11".repeat(32));
+  if (wrong.ok) await fail("a worker answered although expectedHash differs from the specifier's workerHash");
+  if (!/is not the expected/.test(wrong.error ?? "")) await fail(`expected an expectedHash error, got: ${wrong.error}`);
+  if (bootstrapCalls !== readsBefore + 1) await fail(`expected one fresh workerHash() read, got ${bootstrapCalls - readsBefore}`);
+  if (bundleFetches !== fetchesBefore) await fail("a bundle was fetched although the hash differed from expectedHash");
+  ok("a wrong expectedHash is refused before any bundle fetch, not answered by the cached unpinned worker");
+
+  const right = await run(workerHash);
+  if (!right.ok) await fail(`a matching expectedHash failed: ${right.error}`);
+  ok("a matching expectedHash boots and answers");
+  await pinPage.close();
+}
+
 /* --- privilege separation: the worker is not the extension --------------- */
 
 // A different specifier, pinning a worker that reports what it can reach. The
