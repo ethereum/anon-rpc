@@ -234,6 +234,42 @@ ok(`fetch after close() rejects (${closedErr.message})`);
   await matching.ready;
   matching.close();
   ok("boot proceeds when workerHash equals expectedHash (case-insensitive)");
+
+  // expectedHash + resolvers: the host knows the answer, so nothing is read
+  // and no bootstrap provider is needed.
+  const readsBefore = specifierReads;
+  const fetchesBefore = served;
+  const noRead = new AnonRpcWorker({
+    address: SPECIFIER,
+    network: allowLoopback,
+    expectedHash: real.hash,
+    resolvers: [real.url],
+  });
+  await noRead.ready;
+  noRead.close();
+  if (specifierReads !== readsBefore) fail(`expected no specifier read, got ${specifierReads - readsBefore}`);
+  if (served !== fetchesBefore + 1) fail(`expected one bundle fetch, got ${served - fetchesBefore}`);
+  ok("expectedHash + resolvers boot with no specifier read and no provider");
+
+  // The pin still holds: bytes from a host-given resolver must match it.
+  let mismatch;
+  const wrongBytes = new AnonRpcWorker({
+    address: SPECIFIER,
+    network: allowLoopback,
+    expectedHash: real.hash,
+    resolvers: [other.url],
+  });
+  await wrongBytes.ready.catch((e) => (mismatch = e));
+  wrongBytes.close();
+  if (!mismatch || !/hash mismatch/.test(mismatch.message)) fail(`expected a hash mismatch, got: ${mismatch?.message}`);
+  ok("bytes from a host-given resolver are still checked against expectedHash");
+
+  let noHash;
+  const unpinned = new AnonRpcWorker({ address: SPECIFIER, network: allowLoopback, resolvers: [real.url] });
+  await unpinned.ready.catch((e) => (noHash = e));
+  unpinned.close();
+  if (!(noHash instanceof TypeError)) fail(`resolvers without expectedHash should fail with TypeError, got: ${noHash}`);
+  ok("resolvers without expectedHash fail the boot");
 }
 
 /** Run a worker whose only job is to report a JSON object, and return it. */

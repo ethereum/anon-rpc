@@ -452,6 +452,23 @@ ok("a second call reused the booted worker — no re-read, no re-fetch, no re-ve
   const right = await run(workerHash);
   if (!right.ok) await fail(`a matching expectedHash failed: ${right.error}`);
   ok("a matching expectedHash boots and answers");
+
+  // expectedHash + resolvers: no specifier read at all. reuse=0 forces a fresh
+  // boot, rather than the worker the run above left in the offscreen cache.
+  const reads = bootstrapCalls;
+  const fetches = bundleFetches;
+  await pinPage.goto(
+    `chrome-extension://${extensionId}/page.html?expectedHash=${workerHash}` +
+      `&resolvers=${encodeURIComponent(`${ORIGIN}/worker.js`)}&reuse=0`,
+  );
+  await pinPage.waitForFunction(() => document.getElementById("out")?.textContent !== "pending", {
+    timeout: 30_000,
+  });
+  const pinnedBoot = JSON.parse((await pinPage.textContent("#out")) ?? "{}");
+  if (!pinnedBoot.ok) await fail(`expectedHash + resolvers failed: ${pinnedBoot.error}`);
+  if (bootstrapCalls !== reads) await fail(`expected no specifier read, got ${bootstrapCalls - reads}`);
+  if (bundleFetches !== fetches + 1) await fail(`expected one fresh bundle fetch, got ${bundleFetches - fetches}`);
+  ok("expectedHash + resolvers boot across the offscreen hop with no specifier read");
   await pinPage.close();
 }
 

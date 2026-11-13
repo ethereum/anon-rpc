@@ -166,6 +166,7 @@ function serve(port: RuntimePort, cache: Map<string, Entry>, idleMs: number): vo
             preExisting: { rpcProvider: provider },
             iframeUrl: msg.iframeUrl,
             expectedHash: msg.expectedHash,
+            resolvers: msg.resolvers,
           });
           entry = { worker, refs: 1, ready: worker.ready };
           cache.set(cacheKey, entry);

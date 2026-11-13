@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { keccak_256 } from "@noble/hashes/sha3";
-import { readSpecifier, fetchAndVerifyBundle, toHex, MAX_BUNDLE_BYTES } from "../src/specifier.js";
+import { readSpecifier, pinnedSpecifier, fetchAndVerifyBundle, toHex, MAX_BUNDLE_BYTES } from "../src/specifier.js";
 
 /* ABI encoders mirroring the decoders under test (same as test/run-e2e.mjs). */
 const enc = new TextEncoder();
@@ -97,6 +97,29 @@ test("readSpecifier rejects a malformed expectedHash with TypeError", async () =
   const provider = mockProvider({});
   for (const bad of ["", "0x1234", "ab".repeat(32), "0x" + "zz".repeat(32)]) {
     await assert.rejects(readSpecifier(provider, "0x" + "01".repeat(20), bad), TypeError);
+  }
+});
+
+test("pinnedSpecifier is undefined without resolvers, so the specifier is read", () => {
+  assert.equal(pinnedSpecifier(undefined, undefined), undefined);
+  assert.equal(pinnedSpecifier("0x" + "ab".repeat(32), undefined), undefined);
+});
+
+test("pinnedSpecifier builds the specifier from expectedHash and resolvers, copying the list", () => {
+  const resolvers = ["https://a.test/w.js", "https://b.test/w.js"];
+  const spec = pinnedSpecifier("0x" + "AB".repeat(32), resolvers);
+  assert.deepEqual(spec, { workerHash: "0x" + "ab".repeat(32), resolvers });
+  resolvers.push("https://evil.test/w.js");
+  assert.equal(spec!.resolvers.length, 2);
+});
+
+test("pinnedSpecifier rejects resolvers without a valid expectedHash, and bad lists, with TypeError", () => {
+  const ok = ["https://a.test/w.js"];
+  assert.throws(() => pinnedSpecifier(undefined, ok), /needs expectedHash/);
+  assert.throws(() => pinnedSpecifier("0x1234", ok), TypeError);
+  const hash = "0x" + "ab".repeat(32);
+  for (const bad of [[], [1], "https://a.test/w.js"]) {
+    assert.throws(() => pinnedSpecifier(hash, bad as unknown as string[]), /non-empty array of strings/);
   }
 });
 

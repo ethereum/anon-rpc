@@ -111,6 +111,8 @@ export type ToOffscreen =
       iframeUrl: string;
       /** `WorkerInit.expectedHash`, passed through to the browser harness. */
       expectedHash?: string;
+      /** `WorkerInit.resolvers`, passed through to the browser harness. */
+      resolvers?: string[];
       /**
        * Reuse an already-booted worker for the same address+config if the
        * offscreen document still has one. False re-boots from scratch, which

@@ -16,6 +16,8 @@ async function go(): Promise<void> {
     const iframeUrl = q.get("iframeUrl") ?? undefined;
     const isolationKey = q.get("isolationKey") ?? undefined;
     const expectedHash = q.get("expectedHash") ?? undefined;
+    const resolvers = q.get("resolvers")?.split(",");
+    const reuse = q.get("reuse") === "0" ? false : undefined;
     // ?logs=1 reads what the worker logged instead of making a call, so the
     // e2e can inspect the §13 path through the same page.
     // ?stream=1 runs the streaming round trip instead (e2e).
@@ -35,6 +37,8 @@ async function go(): Promise<void> {
       iframeUrl,
       isolationKey,
       expectedHash,
+      resolvers,
+      reuse,
       body: { jsonrpc: "2.0", id: 1, method: "eth_blockNumber", params: [] },
     });
     out.textContent = JSON.stringify(res);

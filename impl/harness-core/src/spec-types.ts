@@ -27,6 +27,11 @@ export type WorkerInit = {
   // before any bundle is fetched, so the bootstrap provider's answer alone
   // cannot choose the code that runs.
   expectedHash?: string;
+  // Where to fetch the bundle from, in order, as workerResolvers() would
+  // list them. Requires expectedHash. With both set, the harness does not
+  // read the specifier at all, so no bootstrap provider is needed and none
+  // sees the boot.
+  resolvers?: string[];
   preExisting?: {
     rpcProvider?: RpcProvider;
   };

@@ -34,6 +34,7 @@ import {
   encodePlain,
   fetchAndVerifyBundle,
   readSpecifier,
+  pinnedSpecifier,
   type WirePlain,
 } from "@anon-rpc/harness-core";
 
@@ -152,15 +153,17 @@ export class AnonRpcWorker {
   }
 
   async #boot(init: NodeWorkerInit, config: WirePlain): Promise<void> {
-    const provider = init.preExisting?.rpcProvider;
-    if (!provider) {
-      throw new Error("preExisting.rpcProvider is required to read the specifier (§4)");
-    }
-
     // §4: read the pinned hash, fetch bytes from a resolver, accept only bytes
     // whose keccak256 matches. This happens on the HOST, before the isolate
     // exists — the bytes are verified before anything is asked to run them.
-    const spec = await readSpecifier(provider, init.address, init.expectedHash);
+    let spec = pinnedSpecifier(init.expectedHash, init.resolvers);
+    if (!spec) {
+      const provider = init.preExisting?.rpcProvider;
+      if (!provider) {
+        throw new Error("preExisting.rpcProvider is required to read the specifier (§4)");
+      }
+      spec = await readSpecifier(provider, init.address, init.expectedHash);
+    }
     const bundle = await fetchAndVerifyBundle(spec);
 
     const capabilities = {

@@ -75,13 +75,21 @@ function collectLogs(key: string, w: AnonRpcWorker): void {
   })();
 }
 
-function getWorker(address: string, iframeUrl?: string, expectedHash?: string): AnonRpcWorker {
-  const key = `${address}|${iframeUrl ?? ""}${expectedHash ? `|${expectedHash}` : ""}`;
+function getWorker(
+  address: string,
+  iframeUrl?: string,
+  expectedHash?: string,
+  resolvers?: string[],
+  reuse?: boolean,
+): AnonRpcWorker {
+  const key = `${address}|${iframeUrl ?? ""}${expectedHash ? `|${expectedHash}` : ""}${resolvers ? `|${resolvers.join(",")}` : ""}`;
   let w = workers.get(key);
   if (!w) {
     w = new AnonRpcWorker({
       address,
-      preExisting: { rpcProvider },
+      // With expectedHash + resolvers nothing is read, so no provider is given.
+      ...(resolvers ? { resolvers } : { preExisting: { rpcProvider } }),
+      ...(reuse === false ? { reuse } : {}),
       // Normally omitted — the harness defaults to the packaged sandbox page.
       // The e2e sets it to check §6's same-origin requirement is enforced.
       ...(iframeUrl ? { iframeUrl } : {}),
@@ -112,6 +120,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
     iframeUrl?: string;
     isolationKey?: string;
     expectedHash?: string;
+    resolvers?: string[];
+    reuse?: boolean;
   };
   if (m?.type === "anon-logs") {
     const key = `${m.address || SPECIFIER}|${m.iframeUrl ?? ""}`;
@@ -162,7 +172,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
 
   void (async () => {
     try {
-      const w = getWorker(m.address || SPECIFIER, m.iframeUrl, m.expectedHash);
+      const w = getWorker(m.address || SPECIFIER, m.iframeUrl, m.expectedHash, m.resolvers, m.reuse);
       await w.ready;
       const res = await w.fetch(m.url || `${ORIGIN}/rpc`, {
         method: "POST",
