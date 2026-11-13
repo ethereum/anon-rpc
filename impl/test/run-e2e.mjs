@@ -391,6 +391,139 @@ async function main() {
     JSON.stringify({ name: "WorkerFailedError", code: "e2e-refuse", message: "deliberately failing" }),
   );
 
+  // §5: close is final, including work that has not registered a call or
+  // created its iframe yet. Gates keep these races independent of I/O speed.
+  const closed = await page.evaluate(async (cfg) => {
+    const deferred = () => {
+      let resolve;
+      const promise = new Promise((r) => { resolve = r; });
+      return { promise, resolve };
+    };
+    const turn = () => new Promise((r) => setTimeout(r, 0));
+    const outcome = (promise) => {
+      let timer;
+      return Promise.race([
+        promise.then(() => "resolved", () => "rejected"),
+        new Promise((r) => { timer = setTimeout(() => r("pending"), 1000); }),
+      ]).finally(() => clearTimeout(timer));
+    };
+    const provider = {
+      request: async ({ params }) => cfg.ethCallMap[params[0].to][params[0].data.slice(0, 10)],
+    };
+    const make = (rpcProvider = provider) => new window.AnonRpcWorker({
+      address: cfg.ptAddress, preExisting: { rpcProvider },
+    });
+    const w = make();
+    await w.ready;
+    const pending = w.fetch(`${cfg.origin}/hello`);
+    w.close();
+    const immediateFetch = await outcome(pending);
+    const futureFetch = await outcome(w.fetch(`${cfg.origin}/hello`));
+
+    // Close after normalization settles, before the call is registered.
+    // GET normalization has no internal await, so the microtask lands in that gap.
+    const resuming = make();
+    await resuming.ready;
+    const resumingFetch = resuming.fetch(`${cfg.origin}/hello`);
+    queueMicrotask(() => resuming.close());
+    const resumedFetch = await outcome(resumingFetch);
+
+    const buffering = make();
+    await buffering.ready;
+    const bodyEntered = deferred();
+    const bodyRelease = deferred();
+    const arrayBuffer = Response.prototype.arrayBuffer;
+    Response.prototype.arrayBuffer = async function () {
+      const bytes = await arrayBuffer.call(this);
+      if (this.headers.get("content-type") === "application/x-close-test") {
+        bodyEntered.resolve();
+        await bodyRelease.promise;
+      }
+      return bytes;
+    };
+    let bufferingFetch;
+    try {
+      const pending = buffering.fetch(`${cfg.origin}/echo`, {
+        method: "POST", body: new Blob(["payload"], { type: "application/x-close-test" }),
+      });
+      await bodyEntered.promise;
+      buffering.close();
+      bufferingFetch = await outcome(pending);
+    } finally {
+      bodyRelease.resolve();
+      Response.prototype.arrayBuffer = arrayBuffer;
+      buffering.close();
+    }
+
+    // Buffered bytes leave only microtasks after a gate opens, so the next
+    // event-loop turn also observes any iframe incorrectly created by boot.
+    const bundleUrl = `${cfg.origin}/dist/passthrough-worker.js`;
+    const bundleBytes = await (await fetch(bundleUrl)).arrayBuffer();
+    const realFetch = window.fetch;
+    const boot = [];
+    for (const stage of ["provider", "bundle"]) {
+      const entered = deferred();
+      const release = deferred();
+      let bundleRequests = 0;
+      let iframes = 0;
+      const observer = new MutationObserver((records) => {
+        for (const record of records) {
+          for (const node of record.addedNodes) if (node.nodeName === "IFRAME") iframes++;
+        }
+      });
+      observer.observe(document.body, { childList: true });
+      window.fetch = async (input, init) => {
+        if (String(input) !== bundleUrl) return realFetch(input, init);
+        bundleRequests++;
+        if (stage === "bundle") {
+          entered.resolve();
+          await release.promise;
+        }
+        return new Response(bundleBytes);
+      };
+      const booting = make({
+        request: async (args) => {
+          if (stage === "provider") {
+            entered.resolve();
+            await release.promise;
+          }
+          return provider.request(args);
+        },
+      });
+      try {
+        await entered.promise;
+        booting.close();
+        const ready = await outcome(booting.ready);
+        release.resolve();
+        await turn();
+        boot.push({ ready, bundleRequests, iframes });
+      } finally {
+        release.resolve();
+        booting.close();
+        window.fetch = realFetch;
+        observer.disconnect();
+      }
+    }
+
+    return {
+      immediateFetch, futureFetch, resumedFetch, bufferingFetch, boot,
+    };
+  }, evalCfg);
+  check("fetch issued immediately before close rejects (§5)", closed.immediateFetch, "rejected");
+  check("fetch issued after close rejects (§5)", closed.futureFetch, "rejected");
+  check("close between normalization and call registration rejects fetch (§5)", closed.resumedFetch, "rejected");
+  check("close rejects fetch before body buffering finishes (§5)", closed.bufferingFetch, "rejected");
+  check(
+    "close during specifier lookup prevents download and boot",
+    JSON.stringify(closed.boot[0]),
+    JSON.stringify({ ready: "rejected", bundleRequests: 0, iframes: 0 }),
+  );
+  check(
+    "close during bundle download prevents boot",
+    JSON.stringify(closed.boot[1]),
+    JSON.stringify({ ready: "rejected", bundleRequests: 1, iframes: 0 }),
+  );
+
   // Reload the page and start a fresh worker: the counter must continue —
   // this is what proves the store is IndexedDB, not per-page memory.
   await page.reload();

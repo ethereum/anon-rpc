@@ -7,7 +7,7 @@
 import type { WorkerInit, AnonFetch, AnonFetchResponse, LogEntry, PlainValue } from "../spec-types.js";
 import { PortRpc, RpcError, type SerializedError } from "../protocol.js";
 import { registerKpsBridge } from "./kps-bridge-host.js";
-import { normalizeRequest, type WireRequestInit } from "./normalize-request.js";
+import { normalizeRequest, type NormalizedRequest, type WireRequestInit } from "./normalize-request.js";
 import { openStorageBackend, type StorageBackend } from "./idb-storage.js";
 import {
   CallQueue,
@@ -72,6 +72,8 @@ export class AnonRpcWorker {
   // Set on fatal failure (boot failure, worker crash, close): everything
   // pending is rejected with it and future fetches fail fast.
   #failure?: unknown;
+  // Fetches being normalized have no CallRecord yet.
+  #normalizing = new Set<(err: unknown) => void>();
   // §11 storage backend (IndexedDB; memory fallback), opened on first use.
   #storage?: Promise<StorageBackend>;
 
@@ -99,6 +101,8 @@ export class AnonRpcWorker {
     if (this.#failure !== undefined) return;
     this.#failure = err;
     this.#readyReject(err);
+    for (const reject of this.#normalizing) reject(err);
+    this.#normalizing.clear();
     for (const rec of this.#calls.values()) {
       rec.cleanup?.();
       rec.reject(err);
@@ -116,7 +120,9 @@ export class AnonRpcWorker {
     if (!provider) throw new Error("preExisting.rpcProvider is required to read the specifier");
 
     const spec = await readSpecifier(provider, this.#init.address);
+    if (this.#failure !== undefined) return;
     const bundleBytes = await fetchAndVerifyBundle(spec, MAX_BUNDLE_BYTES, [kpsResolverKind]);
+    if (this.#failure !== undefined) return;
 
     const channel = new MessageChannel();
     const rpc = new PortRpc(channel.port1);
@@ -151,6 +157,7 @@ export class AnonRpcWorker {
     });
     document.body.appendChild(iframe);
     await ready;
+    if (this.#failure !== undefined) return;
 
     // §7.1: config rides the init message. It is already a §9.4 copy, and
     // structured clone carries every plain value unchanged.
@@ -265,7 +272,15 @@ export class AnonRpcWorker {
 
   async #fetch(input: RequestInfo | URL, init?: Parameters<AnonFetch>[1]): Promise<Response> {
     if (this.#failure !== undefined) throw this.#failure;
-    const { url, requestInit, transfer, signal: hostSignal } = await normalizeRequest(input, init);
+    // close() must reject even if body buffering never completes.
+    const normalization = normalizeRequest(input, init);
+    const { url, requestInit, transfer, signal: hostSignal } = await new Promise<NormalizedRequest>((resolve, reject) => {
+      if (this.#failure !== undefined) reject(this.#failure);
+      else this.#normalizing.add(reject);
+      normalization.then(resolve, reject).finally(() => this.#normalizing.delete(reject));
+    });
+    // close() can run after normalization resolves, before this continuation.
+    if (this.#failure !== undefined) throw this.#failure;
     const callId = this.#nextCallId++;
 
     return new Promise<Response>((resolve, reject) => {
