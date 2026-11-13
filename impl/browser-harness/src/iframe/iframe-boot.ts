@@ -20,6 +20,17 @@
     const runtimeSource: string = ev.data.runtimeSource;
     const bundleBytes: Uint8Array = ev.data.bundleBytes;
 
+    // The host's egress policy, applied before the worker exists: a worker
+    // spawned from a blob: URL inherits this document's CSP, so it can then
+    // connect only where the host allowed. A policy can be added from within a
+    // document but never relaxed, so the worker cannot undo it.
+    if (typeof ev.data.csp === "string") {
+      const meta = document.createElement("meta");
+      meta.httpEquiv = "Content-Security-Policy";
+      meta.content = ev.data.csp;
+      document.head.append(meta);
+    }
+
     const blob = new Blob([runtimeSource], { type: "text/javascript" });
     const worker = new Worker(URL.createObjectURL(blob));
 

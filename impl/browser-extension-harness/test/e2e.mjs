@@ -426,6 +426,34 @@ if (bootstrapCalls !== 2 || bundleFetches !== 1) {
 if (workerRpcCalls !== 2) await fail(`expected 2 worker RPC calls, got ${workerRpcCalls}`);
 ok("a second call reused the booted worker — no re-read, no re-fetch, no re-verify");
 
+/* --- connectSrc, across the offscreen hop -------------------------------- */
+
+// The offscreen document holds a worker booted for this address without
+// confinement. A caller that sets connectSrc must get a fresh worker under its
+// policy, not that one: with [] the worker cannot reach the RPC server at all,
+// and with the server's origin listed it can.
+{
+  const csPage = await context.newPage();
+  const run = async (connectSrc) => {
+    await csPage.goto(`chrome-extension://${extensionId}/page.html?connectSrc=${encodeURIComponent(JSON.stringify(connectSrc))}`);
+    await csPage.waitForFunction(() => document.getElementById("out")?.textContent !== "pending", { timeout: 30_000 });
+    return JSON.parse((await csPage.textContent("#out")) ?? "{}");
+  };
+  const fetchesBefore = bundleFetches;
+  const rpcBefore = workerRpcCalls;
+  const none = await run([]);
+  if (none.ok) await fail("a worker confined to connectSrc [] reached the RPC server");
+  if (workerRpcCalls !== rpcBefore) await fail("the RPC server saw a call from a worker confined to connectSrc []");
+  if (bundleFetches !== fetchesBefore + 1) await fail("connectSrc [] was answered by the cached unconfined worker, not a fresh boot");
+  ok("connectSrc [] boots a fresh worker that cannot reach the RPC server, not the cached unconfined one");
+
+  const listed = await run([ORIGIN]);
+  if (!listed.ok) await fail(`a worker allowed to reach the RPC server failed: ${listed.error}`);
+  if (workerRpcCalls !== rpcBefore + 1) await fail(`expected the listed RPC server to see one call, saw ${workerRpcCalls - rpcBefore}`);
+  ok("connectSrc listing the RPC server's origin boots and answers");
+  await csPage.close();
+}
+
 /* --- privilege separation: the worker is not the extension --------------- */
 
 // A different specifier, pinning a worker that reports what it can reach. The

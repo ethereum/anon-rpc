@@ -17,11 +17,15 @@ import { gzipSync } from "node:zlib";
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { keccak_256 } from "@noble/hashes/sha3";
-import { chromium } from "playwright";
+import { chromium, firefox } from "playwright";
 import { listen } from "@kpstreams/server";
 import { build as esbuild } from "esbuild";
 
 const HERE = new URL(".", import.meta.url).pathname;
+// E2E_BROWSER=firefox runs what does not need WebRTC in Firefox; the default
+// is Chromium, which runs everything.
+const BROWSER = process.env.E2E_BROWSER ?? "chromium";
+if (BROWSER !== "chromium" && BROWSER !== "firefox") throw new Error(`E2E_BROWSER must be chromium or firefox, not ${BROWSER}`);
 const ROOT = new URL("..", import.meta.url).pathname;
 
 const cleanups = [];
@@ -84,6 +88,36 @@ const PT_KPS_ADDR = "0xabc0000000000000000000000000000000000003";
 const PT_KPS_BAD_ADDR = "0xabc0000000000000000000000000000000000004";
 const PT_KPS_GZ_ADDR = "0xabc0000000000000000000000000000000000005";
 const FAIL_ADDR = "0xabc0000000000000000000000000000000000006";
+const EGRESS_ADDR = "0xabc0000000000000000000000000000000000007";
+
+// A worker that, on each call, tries to reach two servers by every ambient
+// route a Web Worker has: the "allowed" one by fetch, and an "elsewhere" one
+// (another origin, named by no harness setting) by fetch, WebSocket and
+// importScripts. Both URLs come from config, so the bytes stay fixed. The
+// call's ?q= tag marks which case the elsewhere server's hits belong to.
+const egressWorkerBytes = new TextEncoder().encode(
+  `const { allowed, elsewhere } = anonRpcWorker.config;
+anonRpcWorker.signalReady();
+(async () => {
+  for (;;) {
+    const call = await anonRpcWorker.acceptCall();
+    const tag = new URL(call.url).searchParams.get("q");
+    const out = {};
+    out.fetchAllowed = await fetch(allowed + "/hello").then((r) => (r.ok ? "ok" : "status " + r.status), (e) => e.name);
+    out.fetchElsewhere = await fetch(elsewhere + "/" + tag + "-fetch").then(() => "reached", (e) => e.name);
+    out.ws = await new Promise((done) => {
+      try {
+        const ws = new WebSocket(elsewhere.replace("http", "ws") + "/" + tag + "-ws");
+        ws.onopen = () => done("open");
+        ws.onerror = () => done("error");
+      } catch (e) { done(e.name); }
+    });
+    try { importScripts(elsewhere + "/" + tag + "-script"); out.importScripts = "loaded"; } catch (e) { out.importScripts = e.name; }
+    call.respond({ status: 200, headers: [], body: new TextEncoder().encode(JSON.stringify(out)) });
+  }
+})();
+`,
+);
 
 // A worker that refuses to become ready (§7 signalFailed) — plain source, no
 // build: its bytes are the hash-pinned artifact like any other bundle. The
@@ -118,14 +152,33 @@ async function main() {
   });
   console.log(`http server: ${origin}`);
 
-  // 5. drive chromium
-  const browser = await chromium.launch({
-    args: [
-      "--no-sandbox",
-      "--disable-features=WebRtcHideLocalIpsWithMdns",
-      "--force-webrtc-ip-handling-policy=default",
-    ],
+  // 4b. a server on another origin that no harness setting names: every hit
+  // it records is a worker reaching out on its own
+  const elsewhereHits = [];
+  const elsewhere = createServer((req, res) => {
+    elsewhereHits.push(req.url);
+    res.writeHead(200, { "access-control-allow-origin": "*", "content-type": "text/javascript" });
+    res.end("");
   });
+  elsewhere.on("upgrade", (req, socket) => {
+    elsewhereHits.push(req.url);
+    socket.destroy();
+  });
+  await new Promise((r) => elsewhere.listen(0, "127.0.0.1", r));
+  cleanups.push(() => elsewhere.close());
+  const elsewhereOrigin = `http://127.0.0.1:${elsewhere.address().port}`;
+
+  // 5. drive the browser
+  const browser =
+    BROWSER === "firefox"
+      ? await firefox.launch()
+      : await chromium.launch({
+          args: [
+            "--no-sandbox",
+            "--disable-features=WebRtcHideLocalIpsWithMdns",
+            "--force-webrtc-ip-handling-policy=default",
+          ],
+        });
   cleanups.push(() => browser.close());
   const page = await browser.newPage();
   page.on("console", (m) => console.log(`  [page:${m.type()}] ${m.text()}`));
@@ -145,6 +198,60 @@ async function main() {
     kpsAddr,
     origin,
   };
+
+  // connectSrc: without it the worker reaches a server nothing named, by
+  // fetch, WebSocket and importScripts alike. With it, only the listed
+  // sources answer, and an empty list allows nothing.
+  const egress = await page.evaluate(
+    async (cfg) => {
+      const provider = {
+        request: async ({ params }) => cfg.ethCallMap[params[0].to][params[0].data.slice(0, 10)],
+      };
+      const run = async (tag, connectSrc) => {
+        const w = new window.AnonRpcWorker({
+          address: cfg.egressAddress,
+          config: { allowed: cfg.origin, elsewhere: cfg.elsewhere },
+          preExisting: { rpcProvider: provider },
+          ...(connectSrc ? { connectSrc } : {}),
+        });
+        await w.ready;
+        const out = await (await w.fetch(`${cfg.origin}/hello?q=${tag}`)).json();
+        w.close();
+        return out;
+      };
+      const open = await run("open");
+      const confined = await run("confined", [cfg.origin]);
+      const none = await run("none", []);
+      let badEntry;
+      try {
+        new window.AnonRpcWorker({ address: cfg.egressAddress, connectSrc: [`${cfg.origin}; script-src *`] });
+        badEntry = "constructed";
+      } catch (e) {
+        badEntry = e.name;
+      }
+      return { open, confined, none, badEntry };
+    },
+    { ...evalCfg, egressAddress: EGRESS_ADDR, elsewhere: elsewhereOrigin },
+  );
+  // Give a blocked-or-not WebSocket handshake time to land on the server.
+  await new Promise((r) => setTimeout(r, 500));
+  const hits = (tag) => elsewhereHits.filter((u) => u.startsWith(`/${tag}-`)).sort().join(" ");
+  check("without connectSrc, a worker reaches an unnamed server by fetch, WebSocket and importScripts", hits("open"), "/open-fetch /open-script /open-ws");
+  check("with connectSrc, the listed origin still answers", egress.confined.fetchAllowed, "ok");
+  check("with connectSrc, an unlisted server sees nothing", hits("confined"), "");
+  check("with connectSrc, importScripts cannot reach the network", egress.confined.importScripts, "NetworkError");
+  check("connectSrc [] allows no connection, not even the page origin", egress.none.fetchAllowed, "TypeError");
+  check("connectSrc [] leaves an unlisted server untouched", hits("none"), "");
+  check("a connectSrc entry that would add a directive is refused with TypeError", egress.badEntry, "TypeError");
+
+  // Firefox stops here: every case below needs WebRTC to the local KPS peer,
+  // which headless Firefox does not establish ("ICE failed").
+  if (BROWSER === "firefox") {
+    console.log("\n  - firefox: cases that need WebRTC (KPS) skipped");
+    console.log("\n✅ firefox e2e assertions passed");
+    cleanup();
+    process.exit(0);
+  }
 
   const result = await page.evaluate(
     async (cfg) => {
@@ -448,6 +555,7 @@ async function main() {
       if (url === "/dist/test-worker.js") return send(res, 200, "text/javascript", testWorkerBytes);
       if (url === "/dist/passthrough-worker.js") return send(res, 200, "text/javascript", ptWorkerBytes);
       if (url === "/dist/failing-worker.js") return send(res, 200, "text/javascript", failingWorkerBytes);
+      if (url === "/dist/egress-worker.js") return send(res, 200, "text/javascript", egressWorkerBytes);
       if (url === "/hello") return send(res, 200, "text/plain", `hello from ${originRef.value}`);
       if (url === "/echo" && req.method === "POST") {
         const chunks = [];
@@ -496,6 +604,7 @@ async function main() {
       },
       // §7 signalFailed: the worker deliberately refuses readiness.
       [FAIL_ADDR]: specifier(failingWorkerBytes, `${origin}/dist/failing-worker.js`),
+      [EGRESS_ADDR]: specifier(egressWorkerBytes, `${origin}/dist/egress-worker.js`),
       // §4.2 content coding: the bundle arrives gzipped and is decoded before
       // the hash check (the route 500s unless gzip was advertised).
       [PT_KPS_GZ_ADDR]: {
