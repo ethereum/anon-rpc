@@ -326,10 +326,15 @@ export class AnonRpcWorker {
       this.#queue.push(call);
     });
 
-    return new Response(response.body as Uint8Array, {
+    const res = new Response(response.body as Uint8Array, {
       status: response.status,
       headers: response.headers,
     });
+    // Response.url is unset by the constructor. Use the worker's post-redirect
+    // URL, or the requested one when it omits it, as a native fetch never
+    // answers with an empty url.
+    Object.defineProperty(res, "url", { value: response.url || url });
+    return res;
   }
 
   /** Fail everything in flight and release the isolate. */

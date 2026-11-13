@@ -148,6 +148,8 @@ const { result } = await res.json();
 if (result !== "0x1312d00") fail(`unexpected RPC result: ${result}`);
 if (workerRpcCalls !== 1) fail(`expected 1 call to reach the chain, got ${workerRpcCalls}`);
 ok(`eth_blockNumber answered through the isolated worker (${result})`);
+if (res.url !== chainUrl) fail(`Response.url is ${JSON.stringify(res.url)}, not the worker's ${chainUrl}`);
+ok("Response.url is the URL the worker reported");
 
 // The reference worker is unmodified: it calls the ambient `fetch` it was
 // written against, which here is a capability the host installed and mediates.
@@ -217,6 +219,21 @@ async function interrogate(source, init = {}) {
   const out = await (await w.fetch("http://report.invalid/")).json();
   w.close();
   return out;
+}
+
+// A worker may omit url; Response.url is then the requested URL, serialized
+// as fetch would, never empty.
+{
+  const pub = await publish(`
+anonRpcWorker.signalReady();
+(async () => { for (;;) { const c = await anonRpcWorker.acceptCall(); c.respond({ status: 200, headers: [], body: new Uint8Array(0) }); } })();
+`);
+  const w = new AnonRpcWorker({ address: SPECIFIER, preExisting: { rpcProvider: pub.provider } });
+  cleanups.push(() => w.close());
+  const r = await w.fetch("http://report.invalid");
+  w.close();
+  if (r.url !== "http://report.invalid/") fail(`Response.url without a worker url is ${JSON.stringify(r.url)}`);
+  ok("Response.url falls back to the requested URL when the worker omits it");
 }
 
 /* --- 4. zero ambient capability: there is nothing to reach ------------- */
